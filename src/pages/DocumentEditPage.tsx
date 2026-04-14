@@ -2,10 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { MarkdownEditor } from "@/components/MarkdownEditor";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
+import { ReviewPanel } from "@/components/ReviewPanel";
 import { Button } from "@/components/ui/button";
 import { useAutoSave } from "@/hooks/use-auto-save";
 
 type ViewMode = "edit" | "preview" | "split";
+
+interface RevisionResult {
+  previousContent: string;
+  revisedContent: string;
+  summary: string;
+}
 
 export function DocumentEditPage() {
   const { projectId, documentId } = useParams<{
@@ -17,6 +24,12 @@ export function DocumentEditPage() {
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "unsaved">("saved");
+  const [showReview, setShowReview] = useState(false);
+  const [diffView, setDiffView] = useState<{
+    previous: string;
+    revised: string;
+    summary: string;
+  } | null>(null);
 
   useEffect(() => {
     async function loadDocument() {
@@ -63,6 +76,19 @@ export function DocumentEditPage() {
     setContent(value);
     setSaveStatus("unsaved");
   };
+
+  const handleContentUpdate = useCallback((newContent: string) => {
+    setContent(newContent);
+    setSaveStatus("saved"); // Revision already saved server-side
+  }, []);
+
+  const handleRevision = useCallback((result: RevisionResult) => {
+    setDiffView({
+      previous: result.previousContent,
+      revised: result.revisedContent,
+      summary: result.summary,
+    });
+  }, []);
 
   if (isLoading) {
     return (
@@ -121,19 +147,58 @@ export function DocumentEditPage() {
           >
             Preview
           </Button>
+          <div className="mx-2 h-5 w-px bg-border" />
+          <Button
+            variant={showReview ? "default" : "ghost"}
+            size="sm"
+            onClick={() => {
+              setShowReview(!showReview);
+              setDiffView(null);
+            }}
+          >
+            Review
+          </Button>
         </div>
       </div>
 
-      {/* Editor / Preview */}
+      {/* Diff banner */}
+      {diffView && (
+        <div className="flex items-center justify-between border-b bg-muted/50 px-4 py-2">
+          <p className="text-sm">
+            <span className="font-medium">Revision applied:</span>{" "}
+            <span className="text-muted-foreground">{diffView.summary}</span>
+          </p>
+          <Button size="sm" variant="ghost" onClick={() => setDiffView(null)}>
+            Dismiss
+          </Button>
+        </div>
+      )}
+
+      {/* Editor / Preview / Review */}
       <div className="flex min-h-0 flex-1">
-        {viewMode !== "preview" && (
-          <div className={`min-h-0 ${viewMode === "split" ? "w-1/2 border-r" : "w-full"}`}>
-            <MarkdownEditor value={content} onChange={handleChange} />
-          </div>
-        )}
-        {viewMode !== "edit" && (
-          <div className={`min-h-0 overflow-auto ${viewMode === "split" ? "w-1/2" : "w-full"}`}>
-            <MarkdownPreview content={content} />
+        {/* Editor area */}
+        <div className={`flex min-h-0 ${showReview ? "w-2/3" : "w-full"}`}>
+          {viewMode !== "preview" && (
+            <div className={`min-h-0 ${viewMode === "split" ? "w-1/2 border-r" : "w-full"}`}>
+              <MarkdownEditor value={content} onChange={handleChange} />
+            </div>
+          )}
+          {viewMode !== "edit" && (
+            <div className={`min-h-0 overflow-auto ${viewMode === "split" ? "w-1/2" : "w-full"}`}>
+              <MarkdownPreview content={content} />
+            </div>
+          )}
+        </div>
+
+        {/* Review panel */}
+        {showReview && projectId && documentId && (
+          <div className="w-1/3 border-l">
+            <ReviewPanel
+              projectId={projectId}
+              documentId={documentId}
+              onContentUpdate={handleContentUpdate}
+              onRevision={handleRevision}
+            />
           </div>
         )}
       </div>
