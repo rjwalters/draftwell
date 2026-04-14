@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { buildPrompt, parseReviewResponse, runPersonaReview, runAllPersonas } from "../runner.js";
-import { criticalEditor, DEFAULT_PERSONAS } from "../personas.js";
+import { criticalEditor, DEFAULT_PERSONAS, styleReviewer } from "../personas.js";
 import type { Persona } from "../types.js";
 
 describe("buildPrompt", () => {
@@ -142,7 +142,6 @@ describe("runAllPersonas", () => {
 
 describe("buildPrompt with voice profile", () => {
   it("injects voice profile section for style-reviewer persona", () => {
-    const { styleReviewer } = require("../personas.js") as typeof import("../personas.js");
     const voiceProfile = {
       dimensions: [
         { name: "Sentence length", observation: "Short sentences", rule: "Keep sentences under 20 words" },
@@ -177,7 +176,6 @@ describe("buildPrompt with voice profile", () => {
   });
 
   it("handles missing voice profile gracefully", () => {
-    const { styleReviewer } = require("../personas.js") as typeof import("../personas.js");
     const prompt = buildPrompt(styleReviewer, "Test document");
 
     assert.ok(!prompt.includes("{{voiceProfile}}"), "No unfilled voiceProfile placeholder");
