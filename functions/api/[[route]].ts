@@ -1032,6 +1032,7 @@ async function handleGenerateRevision(
   const response = await callClaudeAPI(prompt, apiKey, {
     maxTokens: 8192,
     gatewayUrl: getGatewayUrl(env),
+    gatewayToken: env.AI_GATEWAY_TOKEN,
   });
   const result = parseRevisionResponse(response);
 
@@ -1358,6 +1359,7 @@ async function handleGenerateRefinement(
   const response = await callClaudeAPI(prompt, apiKey, {
     maxTokens: 8192,
     gatewayUrl: getGatewayUrl(env),
+    gatewayToken: env.AI_GATEWAY_TOKEN,
   });
   const result = parseRevisionResponse(response);
 
