@@ -14,3 +14,12 @@ export const defaultStyleguide: Styleguide = {
   rules: [...bannedPhrases, ...overusedWords, ...styleRules],
   structuralRules,
 };
+
+// Language discipline rule re-exports
+export { orwellRules } from "./orwell.js";
+export { zinsserRules, zinsserPasses } from "./zinsser.js";
+export { ogilvyRules } from "./ogilvy.js";
+
+export * from "./orwell.js";
+export * from "./zinsser.js";
+export * from "./ogilvy.js";

@@ -17,7 +17,7 @@ export function check(document: string, styleguide: Styleguide): CheckReport {
   const results = checkPatterns(document, styleguide.rules);
   const structuralResults = checkStructural(document, styleguide.structuralRules);
 
-  const counts: Record<Severity, number> = { error: 0, warning: 0, info: 0 };
+  const counts: Record<Severity, number> = { error: 0, warning: 0, info: 0, suggestion: 0 };
   for (const r of results) {
     counts[r.severity]++;
   }
@@ -350,8 +350,12 @@ function computeScore(
   counts: Record<Severity, number>,
   _totalIssues: number,
 ): number {
-  // Weighted: errors = 1.0, warnings = 0.5, info = 0.1
-  const weighted = counts.error * 1.0 + counts.warning * 0.5 + counts.info * 0.1;
+  // Weighted: errors = 1.0, warnings = 0.5, info = 0.1, suggestions = 0.05
+  const weighted =
+    counts.error * 1.0 +
+    counts.warning * 0.5 +
+    counts.info * 0.1 +
+    counts.suggestion * 0.05;
 
   // Sigmoid-like mapping to 0-10 range
   // score = 10 * (1 - e^(-weighted/10))
