@@ -1,17 +1,15 @@
 // Cloudflare Pages Functions API handler
 // This provides a simple API layer for the frontend
 
+import { reviewDocument, scoreDocument } from "../../packages/review-panel/src/index";
+import type { VoiceProfileRules } from "../../packages/review-panel/src/types";
+import { check, defaultStyleguide } from "../../packages/styleguide/src/index";
 import {
   buildRefinementPrompt,
-  buildReviewPrompt,
   buildRevisionPrompt,
   callClaudeAPI,
-  chunkSections,
   estimateTokens,
-  parseReviewResponse,
   parseRevisionResponse,
-  parseSections,
-  type ReviewItemResult,
 } from "../lib/pipeline";
 
 interface Env {
@@ -747,6 +745,62 @@ function getGatewayUrl(env: Env): string | undefined {
   return undefined;
 }
 
+/** Map review-panel severity to API severity */
+function mapPersonaSeverity(
+  severity: "critical" | "major" | "minor" | "suggestion",
+): "error" | "warning" | "suggestion" {
+  switch (severity) {
+    case "critical":
+      return "error";
+    case "major":
+      return "warning";
+    case "minor":
+      return "warning";
+    case "suggestion":
+      return "suggestion";
+  }
+}
+
+/** Map styleguide severity to API severity */
+function mapStyleguideSeverity(
+  severity: "error" | "warning" | "info" | "suggestion",
+): "error" | "warning" | "suggestion" {
+  switch (severity) {
+    case "error":
+      return "error";
+    case "warning":
+      return "warning";
+    case "info":
+      return "suggestion";
+    case "suggestion":
+      return "suggestion";
+  }
+}
+
+/** Fetch voice profile rules for the user's active profile, if any */
+async function getUserVoiceProfile(
+  env: Env,
+  userId: string,
+): Promise<VoiceProfileRules | undefined> {
+  const profile = await env.DB.prepare(
+    "SELECT profile_data FROM voice_profiles WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+  )
+    .bind(userId)
+    .first<{ profile_data: string }>();
+
+  if (!profile?.profile_data) return undefined;
+
+  try {
+    const data = JSON.parse(profile.profile_data);
+    if (data.dimensions && data.summary && data.escape_clause) {
+      return data as VoiceProfileRules;
+    }
+  } catch {
+    // Invalid profile data, skip
+  }
+  return undefined;
+}
+
 async function handleGenerateReview(
   env: Env,
   request: Request,
@@ -775,38 +829,36 @@ async function handleGenerateReview(
   const content = object ? await object.text() : "";
   if (!content.trim()) return error("Document is empty", 400);
 
-  // Parse and chunk the document
-  const sections = parseSections(content);
-  const chunks = chunkSections(sections);
+  // Phase 1: Run styleguide check (pure regex, no AI calls, instant)
+  const styleguideReport = check(content, defaultStyleguide);
 
-  // Generate review for each chunk
-  const allItems: ReviewItemResult[] = [];
-  const summaries: string[] = [];
+  // Phase 2: Run multi-persona AI review in parallel
+  const voiceProfile = await getUserVoiceProfile(env, userId);
+  const aggregatedReview = await reviewDocument(content, {
+    callModel: (prompt: string) =>
+      callClaudeAPI(prompt, apiKey, {
+        maxTokens: 4096,
+        gatewayUrl: getGatewayUrl(env),
+        gatewayToken: env.AI_GATEWAY_TOKEN,
+      }),
+    voiceProfile,
+  });
 
-  for (let i = 0; i < chunks.length; i++) {
-    const prompt = buildReviewPrompt(chunks[i].text, i, chunks.length);
-    const response = await callClaudeAPI(prompt, apiKey, {
-      maxTokens: 4096,
-      gatewayUrl: getGatewayUrl(env),
-      gatewayToken: env.AI_GATEWAY_TOKEN,
-    });
-    const result = parseReviewResponse(response);
-    allItems.push(...result.items);
-    summaries.push(result.summary);
-  }
-
-  const combinedSummary = summaries.join(" ");
+  // Build summary from persona reviews
+  const personaSummaries = aggregatedReview.personaReviews.map((pr) => pr.summary).filter(Boolean);
+  const combinedSummary =
+    personaSummaries.length > 0 ? personaSummaries.join(" ") : "Review complete.";
 
   // Create review record
   const reviewId = crypto.randomUUID();
   const now = new Date().toISOString();
   const r2Key = `users/${userId}/projects/${projectId}/documents/${docId}/reviews/${reviewId}.json`;
 
-  // Store full review data in R2
+  // Store full review data in R2 (includes styleguide report and persona details)
   const reviewData = {
     summary: combinedSummary,
-    items: allItems,
-    chunks: chunks.length,
+    styleguide: styleguideReport,
+    aggregatedReview,
     estimatedTokens: estimateTokens(content),
     generatedAt: now,
   };
@@ -819,23 +871,70 @@ async function handleGenerateReview(
     .bind(reviewId, docId, doc.current_revision, r2Key, now)
     .run();
 
-  // Create review_items records in D1
+  // Convert multi-persona consensus items to review_items records
   const itemRecords = [];
-  for (const item of allItems) {
+
+  // Add consensus cluster items (highest value — multiple personas agree)
+  for (const cluster of aggregatedReview.clusters) {
     const itemId = crypto.randomUUID();
+    const severity = mapPersonaSeverity(cluster.severity);
+    const description = `[${cluster.consensusCount}/${cluster.totalPersonas} personas] ${cluster.representativeDescription}`;
     await env.DB.prepare(
       "INSERT INTO review_items (id, review_id, category, description, severity, location, status) VALUES (?, ?, ?, ?, ?, ?, 'open')",
     )
-      .bind(itemId, reviewId, item.category, item.description, item.severity, item.location)
+      .bind(itemId, reviewId, cluster.category, description, severity, null)
       .run();
     itemRecords.push({
       id: itemId,
       review_id: reviewId,
-      category: item.category,
-      description: item.description,
-      severity: item.severity,
-      location: item.location,
-      suggestion: item.suggestion,
+      category: cluster.category,
+      description,
+      severity,
+      location: null,
+      suggestion: cluster.items[0]?.suggestion ?? null,
+      status: "open",
+    });
+  }
+
+  // Add styleguide violations as review items (category: "styleguide")
+  for (const result of styleguideReport.results) {
+    const itemId = crypto.randomUUID();
+    const severity = mapStyleguideSeverity(result.severity);
+    const location = `line ${result.line}`;
+    await env.DB.prepare(
+      "INSERT INTO review_items (id, review_id, category, description, severity, location, status) VALUES (?, ?, ?, ?, ?, ?, 'open')",
+    )
+      .bind(itemId, reviewId, "styleguide", result.description, severity, location)
+      .run();
+    itemRecords.push({
+      id: itemId,
+      review_id: reviewId,
+      category: "styleguide",
+      description: result.description,
+      severity,
+      location,
+      suggestion: result.suggestion ?? null,
+      status: "open",
+    });
+  }
+
+  // Add structural violations from styleguide
+  for (const result of styleguideReport.structuralResults) {
+    const itemId = crypto.randomUUID();
+    const severity = mapStyleguideSeverity(result.severity);
+    await env.DB.prepare(
+      "INSERT INTO review_items (id, review_id, category, description, severity, location, status) VALUES (?, ?, ?, ?, ?, ?, 'open')",
+    )
+      .bind(itemId, reviewId, "styleguide", result.description, severity, null)
+      .run();
+    itemRecords.push({
+      id: itemId,
+      review_id: reviewId,
+      category: "styleguide",
+      description: result.description,
+      severity,
+      location: null,
+      suggestion: result.suggestion ?? null,
       status: "open",
     });
   }
@@ -850,6 +949,11 @@ async function handleGenerateReview(
         created_at: now,
       },
       items: itemRecords,
+      styleguide: {
+        score: styleguideReport.score,
+        totalIssues: styleguideReport.totalIssues,
+        counts: styleguideReport.counts,
+      },
     },
     201,
   );
@@ -1418,6 +1522,147 @@ async function handleGenerateRefinement(
   );
 }
 
+async function handleScoreDocument(
+  env: Env,
+  request: Request,
+  projectId: string,
+  docId: string,
+  userId: string,
+): Promise<Response> {
+  if (!(await verifyProjectOwnership(env, projectId, userId))) {
+    return error("Project not found", 404);
+  }
+
+  const doc = await env.DB.prepare(
+    "SELECT id, project_id, title, current_revision, r2_key FROM documents WHERE id = ? AND project_id = ?",
+  )
+    .bind(docId, projectId)
+    .first<Document>();
+
+  if (!doc) return error("Document not found", 404);
+
+  const apiKey = getApiKey(env, request);
+  if (!apiKey)
+    return error("API key required. Set ANTHROPIC_API_KEY or pass x-anthropic-key header.", 400);
+
+  // Fetch document content from R2
+  const object = await env.CONTENT_BUCKET.get(doc.r2_key);
+  const content = object ? await object.text() : "";
+  if (!content.trim()) return error("Document is empty", 400);
+
+  // Run calibrated scoring via review-panel
+  const documentScore = await scoreDocument(
+    content,
+    docId,
+    doc.current_revision,
+    (prompt: string) =>
+      callClaudeAPI(prompt, apiKey, {
+        maxTokens: 4096,
+        gatewayUrl: getGatewayUrl(env),
+        gatewayToken: env.AI_GATEWAY_TOKEN,
+      }),
+  );
+
+  // Persist to document_scores table
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    "INSERT INTO document_scores (id, document_id, revision_number, overall_score, model, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  )
+    .bind(
+      documentScore.id,
+      docId,
+      doc.current_revision,
+      documentScore.overallScore,
+      documentScore.model,
+      now,
+    )
+    .run();
+
+  // Persist dimension scores
+  for (const dim of documentScore.dimensions) {
+    const dimId = crypto.randomUUID();
+    await env.DB.prepare(
+      "INSERT INTO dimension_scores (id, document_score_id, dimension_id, score, justification) VALUES (?, ?, ?, ?, ?)",
+    )
+      .bind(dimId, documentScore.id, dim.dimensionId, dim.score, dim.justification)
+      .run();
+
+    // Persist weaknesses
+    for (const weakness of dim.weaknesses) {
+      const weaknessId = crypto.randomUUID();
+      await env.DB.prepare(
+        "INSERT INTO dimension_weaknesses (id, dimension_score_id, description, evidence) VALUES (?, ?, ?, ?)",
+      )
+        .bind(weaknessId, dimId, weakness.description, weakness.evidence)
+        .run();
+    }
+  }
+
+  return json(documentScore, 201);
+}
+
+async function handleGetScores(
+  env: Env,
+  projectId: string,
+  docId: string,
+  userId: string,
+): Promise<Response> {
+  if (!(await verifyProjectOwnership(env, projectId, userId))) {
+    return error("Project not found", 404);
+  }
+
+  const { results: scores } = await env.DB.prepare(
+    "SELECT ds.id, ds.document_id, ds.revision_number, ds.overall_score, ds.model, ds.created_at FROM document_scores ds JOIN documents d ON ds.document_id = d.id WHERE d.id = ? AND d.project_id = ? ORDER BY ds.created_at DESC",
+  )
+    .bind(docId, projectId)
+    .all<{
+      id: string;
+      document_id: string;
+      revision_number: number;
+      overall_score: number;
+      model: string;
+      created_at: string;
+    }>();
+
+  // Enrich each score with dimension details
+  const enrichedScores = [];
+  for (const score of scores) {
+    const { results: dimensions } = await env.DB.prepare(
+      "SELECT id, dimension_id, score, justification FROM dimension_scores WHERE document_score_id = ?",
+    )
+      .bind(score.id)
+      .all<{
+        id: string;
+        dimension_id: string;
+        score: number;
+        justification: string;
+      }>();
+
+    const dimensionsWithWeaknesses = [];
+    for (const dim of dimensions) {
+      const { results: weaknesses } = await env.DB.prepare(
+        "SELECT description, evidence FROM dimension_weaknesses WHERE dimension_score_id = ?",
+      )
+        .bind(dim.id)
+        .all<{ description: string; evidence: string }>();
+
+      dimensionsWithWeaknesses.push({
+        dimensionId: dim.dimension_id,
+        score: dim.score,
+        justification: dim.justification,
+        weaknesses,
+      });
+    }
+
+    enrichedScores.push({
+      ...score,
+      dimensions: dimensionsWithWeaknesses,
+    });
+  }
+
+  return json({ scores: enrichedScores });
+}
+
 // Main request handler
 export const onRequest: PagesFunction<Env> = async (context) => {
   const { request, env, params } = context;
@@ -1598,6 +1843,21 @@ export const onRequest: PagesFunction<Env> = async (context) => {
       const user = await getAuthenticatedUser(env, request);
       if (!user) return error("Unauthorized", 401);
       return handleGenerateRefinement(env, request, refineMatch[1], refineMatch[2], user.id);
+    }
+
+    // Scoring endpoints
+    const scoreMatch = path.match(/^\/api\/projects\/([^/]+)\/documents\/([^/]+)\/ai\/score$/);
+    if (scoreMatch && method === "POST") {
+      const user = await getAuthenticatedUser(env, request);
+      if (!user) return error("Unauthorized", 401);
+      return handleScoreDocument(env, request, scoreMatch[1], scoreMatch[2], user.id);
+    }
+
+    const scoresListMatch = path.match(/^\/api\/projects\/([^/]+)\/documents\/([^/]+)\/scores$/);
+    if (scoresListMatch && method === "GET") {
+      const user = await getAuthenticatedUser(env, request);
+      if (!user) return error("Unauthorized", 401);
+      return handleGetScores(env, scoresListMatch[1], scoresListMatch[2], user.id);
     }
 
     // Voice profile endpoints (require authentication)

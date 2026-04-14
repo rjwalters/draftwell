@@ -8,6 +8,7 @@ interface ReviewItem {
   description: string;
   severity: "error" | "warning" | "suggestion";
   location: string | null;
+  suggestion: string | null;
   status: "open" | "addressed" | "partial" | "dismissed";
 }
 
@@ -17,6 +18,12 @@ interface Review {
   revision_number: number;
   summary: string;
   created_at: string;
+}
+
+interface StyleguideInfo {
+  score: number;
+  totalIssues: number;
+  counts: Record<string, number>;
 }
 
 interface RevisionResult {
@@ -62,6 +69,7 @@ export function ReviewPanel({
 }: ReviewPanelProps) {
   const [review, setReview] = useState<Review | null>(null);
   const [items, setItems] = useState<ReviewItem[]>([]);
+  const [styleguide, setStyleguide] = useState<StyleguideInfo | null>(null);
   const [isReviewing, setIsReviewing] = useState(false);
   const [isRevising, setIsRevising] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
@@ -86,6 +94,9 @@ export function ReviewPanel({
       const data = await response.json();
       setReview(data.review);
       setItems(data.items);
+      if (data.styleguide) {
+        setStyleguide(data.styleguide);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate review");
     } finally {
@@ -259,6 +270,60 @@ export function ReviewPanel({
               <p className="text-sm text-muted-foreground">{review.summary}</p>
             </div>
 
+            {/* Styleguide Score */}
+            {styleguide && (
+              <div className="mb-4 rounded-md border p-3">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Styleguide Score
+                  </span>
+                  <span
+                    className={`text-sm font-semibold ${
+                      styleguide.score <= 2
+                        ? "text-green-600 dark:text-green-400"
+                        : styleguide.score <= 5
+                          ? "text-yellow-600 dark:text-yellow-400"
+                          : "text-red-600 dark:text-red-400"
+                    }`}
+                  >
+                    {styleguide.score.toFixed(1)}/10
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-gray-200 dark:bg-gray-700">
+                  <div
+                    className={`h-1.5 rounded-full ${
+                      styleguide.score <= 2
+                        ? "bg-green-500"
+                        : styleguide.score <= 5
+                          ? "bg-yellow-500"
+                          : "bg-red-500"
+                    }`}
+                    style={{ width: `${Math.min(styleguide.score * 10, 100)}%` }}
+                  />
+                </div>
+                {styleguide.totalIssues > 0 && (
+                  <div className="mt-2 flex gap-2 text-xs text-muted-foreground">
+                    {styleguide.counts.error > 0 && (
+                      <span className="text-red-600 dark:text-red-400">
+                        {styleguide.counts.error} errors
+                      </span>
+                    )}
+                    {styleguide.counts.warning > 0 && (
+                      <span className="text-yellow-600 dark:text-yellow-400">
+                        {styleguide.counts.warning} warnings
+                      </span>
+                    )}
+                    {(styleguide.counts.info > 0 || styleguide.counts.suggestion > 0) && (
+                      <span>
+                        {(styleguide.counts.info || 0) + (styleguide.counts.suggestion || 0)}{" "}
+                        suggestions
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Progress */}
             <div className="mb-4 flex items-center gap-3 text-xs">
               <span className="rounded-full bg-gray-100 px-2 py-0.5 dark:bg-gray-800">
@@ -318,6 +383,9 @@ export function ReviewPanel({
                     </span>
                   </div>
                   <p className="text-sm">{item.description}</p>
+                  {item.suggestion && (
+                    <p className="mt-1 text-xs text-muted-foreground italic">{item.suggestion}</p>
+                  )}
                   {item.status !== "dismissed" && item.status !== "addressed" && (
                     <div className="mt-2 flex gap-1">
                       <button
