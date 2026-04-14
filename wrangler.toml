@@ -30,4 +30,4 @@ binding = "AI"
 # Environment variables (add secrets via `wrangler secret put`)
 [vars]
 APP_NAME = "Draftwell"
-AI_GATEWAY = "draftwell"
+AI_GATEWAY = "251e6e8626d921603fdc3f0d75576bc6/draftwell"
