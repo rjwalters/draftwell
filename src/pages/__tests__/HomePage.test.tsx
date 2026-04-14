@@ -11,13 +11,15 @@ describe("HomePage", () => {
   it("renders main heading", () => {
     renderWithProviders(<HomePage />);
 
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Draftwell");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      /write it.*critique it.*make it better/i,
+    );
   });
 
   it("renders description text", () => {
     renderWithProviders(<HomePage />);
 
-    expect(screen.getByText(/iterative document refinement/i)).toBeInTheDocument();
+    expect(screen.getByText(/revision into a structured workflow/i)).toBeInTheDocument();
   });
 
   it("shows Get Started button when not authenticated", () => {
@@ -26,7 +28,16 @@ describe("HomePage", () => {
     expect(screen.getByRole("link", { name: /get started/i })).toBeInTheDocument();
   });
 
-  it("renders feature cards", () => {
+  it("renders workflow steps", () => {
+    renderWithProviders(<HomePage />);
+
+    expect(screen.getByText("Draft")).toBeInTheDocument();
+    expect(screen.getByText("Review")).toBeInTheDocument();
+    expect(screen.getByText("Revise")).toBeInTheDocument();
+    expect(screen.getByText("Refine")).toBeInTheDocument();
+  });
+
+  it("renders feature sections", () => {
     renderWithProviders(<HomePage />);
 
     expect(screen.getByText("Critical Review")).toBeInTheDocument();
