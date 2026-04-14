@@ -109,6 +109,24 @@ export interface AggregatedReview {
 }
 
 /**
+ * A voice dimension rule extracted from a user's writing samples.
+ */
+export interface VoiceDimensionRule {
+  name: string;
+  observation: string;
+  rule: string;
+}
+
+/**
+ * A voice profile containing actionable style rules for personalized review.
+ */
+export interface VoiceProfileRules {
+  dimensions: VoiceDimensionRule[];
+  summary: string;
+  escape_clause: string;
+}
+
+/**
  * Options for configuring the review panel.
  */
 export interface ReviewPanelOptions {
@@ -118,6 +136,8 @@ export interface ReviewPanelOptions {
   consensusThreshold?: number;
   /** Function to call the AI model. Allows different backends (Claude API, local, etc.) */
   callModel: (prompt: string) => Promise<string>;
+  /** Optional voice profile rules to personalize the Style Reviewer persona. */
+  voiceProfile?: VoiceProfileRules;
 }
 
 // --- Calibrated Scoring Types ---

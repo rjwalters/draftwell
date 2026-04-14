@@ -16,6 +16,8 @@ export type {
   ModelRole,
   ModelRoleConfig,
   ModelConfig,
+  VoiceDimensionRule,
+  VoiceProfileRules,
 } from "./types.js";
 
 export { DEFAULT_PERSONAS, criticalEditor, domainExpert, generalReader, styleReviewer } from "./personas.js";
@@ -81,6 +83,6 @@ export async function reviewDocument(
   const personas = options.personas ?? DEFAULT_PERSONAS;
   const threshold = options.consensusThreshold ?? 0.75;
 
-  const reviews = await runAllPersonas(personas, document, options.callModel);
+  const reviews = await runAllPersonas(personas, document, options.callModel, options.voiceProfile);
   return aggregateReviews(reviews, threshold);
 }

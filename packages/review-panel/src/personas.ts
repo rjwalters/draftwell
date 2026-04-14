@@ -118,6 +118,7 @@ You are reviewing this document as a Style Reviewer.
 
 Focus your review on these dimensions:
 {{dimensions}}
+{{voiceProfile}}
 
 Review the following document and identify issues. Be specific about locations and provide actionable suggestions.
 
