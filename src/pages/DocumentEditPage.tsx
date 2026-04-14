@@ -92,17 +92,17 @@ export function DocumentEditPage() {
 
   if (isLoading) {
     return (
-      <div className="flex h-[calc(100vh-3.5rem)] items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      <div className="flex h-[calc(100vh-3rem)] items-center justify-center">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex h-[calc(100vh-3.5rem)] flex-col items-center justify-center gap-4">
+      <div className="flex h-[calc(100vh-3rem)] flex-col items-center justify-center gap-4">
         <p className="text-destructive">{error}</p>
-        <Button asChild variant="outline">
+        <Button asChild variant="ghost">
           <Link to={`/projects/${projectId}`}>Back to Project</Link>
         </Button>
       </div>
@@ -110,39 +110,42 @@ export function DocumentEditPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] flex-col">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between border-b px-4 py-2">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Link to={`/projects/${projectId}`} className="hover:text-foreground">
+    <div className="flex h-[calc(100vh-3rem)] flex-col">
+      {/* Toolbar — minimal chrome */}
+      <div className="flex items-center justify-between border-b border-border/50 px-4 py-1.5">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Link to={`/projects/${projectId}`} className="hover:text-foreground transition-colors">
             Project
           </Link>
-          <span>/</span>
-          <span>Edit Document</span>
-          <span className="ml-2 text-xs">
-            {saveStatus === "saving" && "(Saving...)"}
-            {saveStatus === "saved" && "(Saved)"}
-            {saveStatus === "unsaved" && "(Unsaved changes)"}
+          <span className="text-border">/</span>
+          <span>Document</span>
+          <span className="ml-1 text-muted-foreground/60">
+            {saveStatus === "saving" && "Saving..."}
+            {saveStatus === "saved" && "Saved"}
+            {saveStatus === "unsaved" && "Unsaved"}
           </span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
           <Button
-            variant={viewMode === "edit" ? "default" : "ghost"}
+            variant={viewMode === "edit" ? "secondary" : "ghost"}
             size="sm"
+            className="h-7 text-xs px-2.5"
             onClick={() => setViewMode("edit")}
           >
             Edit
           </Button>
           <Button
-            variant={viewMode === "split" ? "default" : "ghost"}
+            variant={viewMode === "split" ? "secondary" : "ghost"}
             size="sm"
+            className="h-7 text-xs px-2.5"
             onClick={() => setViewMode("split")}
           >
             Split
           </Button>
           <Button
-            variant={viewMode === "preview" ? "default" : "ghost"}
+            variant={viewMode === "preview" ? "secondary" : "ghost"}
             size="sm"
+            className="h-7 text-xs px-2.5"
             onClick={() => setViewMode("preview")}
           >
             Preview
@@ -179,7 +182,7 @@ export function DocumentEditPage() {
         {/* Editor area */}
         <div className={`flex min-h-0 ${showReview ? "w-2/3" : "w-full"}`}>
           {viewMode !== "preview" && (
-            <div className={`min-h-0 ${viewMode === "split" ? "w-1/2 border-r" : "w-full"}`}>
+            <div className={`min-h-0 ${viewMode === "split" ? "w-1/2 border-r border-border/50" : "w-full"}`}>
               <MarkdownEditor value={content} onChange={handleChange} />
             </div>
           )}

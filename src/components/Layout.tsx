@@ -8,16 +8,29 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container flex h-14 items-center">
+      <header className="sticky top-0 z-50 w-full border-b border-border/50 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div className="container flex h-12 items-center">
           <div className="mr-4 flex">
             <Link to="/" className="mr-6 flex items-center space-x-2">
-              <span className="font-bold">Draftwell</span>
+              <svg
+                className="h-5 w-5 text-primary"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+              </svg>
+              <span className="font-serif text-lg font-normal tracking-tight">Draftwell</span>
             </Link>
-            <nav className="flex items-center space-x-6 text-sm font-medium">
+            <nav className="flex items-center space-x-6 text-sm">
               <Link
                 to="/"
-                className="transition-colors hover:text-foreground/80 text-foreground/60"
+                className="transition-colors hover:text-foreground text-muted-foreground"
               >
                 Home
               </Link>
@@ -25,13 +38,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 <>
                   <Link
                     to="/dashboard"
-                    className="transition-colors hover:text-foreground/80 text-foreground/60"
+                    className="transition-colors hover:text-foreground text-muted-foreground"
                   >
                     Dashboard
                   </Link>
                   <Link
                     to="/projects"
-                    className="transition-colors hover:text-foreground/80 text-foreground/60"
+                    className="transition-colors hover:text-foreground text-muted-foreground"
                   >
                     Projects
                   </Link>
@@ -42,7 +55,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div className="flex flex-1 items-center justify-end space-x-2">
             <ThemeToggle />
             {user ? (
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
                 <Link
                   to="/profile"
                   className="text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -55,7 +68,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   aria-label="Settings"
                 >
                   <svg
-                    className="h-5 w-5"
+                    className="h-4 w-4"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -75,7 +88,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     />
                   </svg>
                 </Link>
-                <Button variant="outline" size="sm" onClick={() => logout()}>
+                <Button variant="ghost" size="sm" onClick={() => logout()}>
                   Logout
                 </Button>
               </div>
