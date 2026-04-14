@@ -71,10 +71,10 @@ export function useVoiceProfile(): UseVoiceProfileReturn {
     try {
       const res = await fetchWithCredentials("/api/voice/profiles");
       if (!res.ok) {
-        const data = await res.json() as { error: string };
+        const data = (await res.json()) as { error: string };
         throw new Error(data.error);
       }
-      const data = await res.json() as { profiles: VoiceProfile[] };
+      const data = (await res.json()) as { profiles: VoiceProfile[] };
       setProfiles(data.profiles);
     } catch (e) {
       setError((e as Error).message);
@@ -89,10 +89,10 @@ export function useVoiceProfile(): UseVoiceProfileReturn {
     try {
       const res = await fetchWithCredentials(`/api/voice/profiles/${id}`);
       if (!res.ok) {
-        const data = await res.json() as { error: string };
+        const data = (await res.json()) as { error: string };
         throw new Error(data.error);
       }
-      const data = await res.json() as { profile: VoiceProfile; samples: VoiceSample[] };
+      const data = (await res.json()) as { profile: VoiceProfile; samples: VoiceSample[] };
       setActiveProfile(data.profile);
       setSamples(data.samples);
     } catch (e) {
@@ -115,10 +115,10 @@ export function useVoiceProfile(): UseVoiceProfileReturn {
           body: JSON.stringify({ samples: sampleInputs, name }),
         });
         if (!res.ok) {
-          const data = await res.json() as { error: string };
+          const data = (await res.json()) as { error: string };
           throw new Error(data.error);
         }
-        const data = await res.json() as { profile: VoiceProfile };
+        const data = (await res.json()) as { profile: VoiceProfile };
         setProfiles((prev) => [data.profile, ...prev]);
         setActiveProfile(data.profile);
         return data.profile;
@@ -132,36 +132,36 @@ export function useVoiceProfile(): UseVoiceProfileReturn {
     [],
   );
 
-  const deleteProfile = useCallback(async (id: string) => {
-    setError(null);
-    try {
-      const res = await fetchWithCredentials(`/api/voice/profiles/${id}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) {
-        const data = await res.json() as { error: string };
-        throw new Error(data.error);
-      }
-      setProfiles((prev) => prev.filter((p) => p.id !== id));
-      if (activeProfile?.id === id) {
-        setActiveProfile(null);
-        setSamples([]);
-      }
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [activeProfile]);
-
-  const parseProfileData = useCallback(
-    (profile: VoiceProfile): VoiceProfileData | null => {
+  const deleteProfile = useCallback(
+    async (id: string) => {
+      setError(null);
       try {
-        return JSON.parse(profile.profile_data) as VoiceProfileData;
-      } catch {
-        return null;
+        const res = await fetchWithCredentials(`/api/voice/profiles/${id}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const data = (await res.json()) as { error: string };
+          throw new Error(data.error);
+        }
+        setProfiles((prev) => prev.filter((p) => p.id !== id));
+        if (activeProfile?.id === id) {
+          setActiveProfile(null);
+          setSamples([]);
+        }
+      } catch (e) {
+        setError((e as Error).message);
       }
     },
-    [],
+    [activeProfile],
   );
+
+  const parseProfileData = useCallback((profile: VoiceProfile): VoiceProfileData | null => {
+    try {
+      return JSON.parse(profile.profile_data) as VoiceProfileData;
+    } catch {
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
     fetchProfiles();

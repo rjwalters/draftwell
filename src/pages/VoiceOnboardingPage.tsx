@@ -147,8 +147,8 @@ export function VoiceOnboardingPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-3">
-                {profileData.dimensions.map((dim, i) => (
-                  <div key={i} className="rounded-md border p-3">
+                {profileData.dimensions.map((dim) => (
+                  <div key={dim.name} className="rounded-md border p-3">
                     <p className="text-sm font-medium">{dim.name}</p>
                     <p className="mt-1 text-xs text-muted-foreground">{dim.observation}</p>
                     <p className="mt-1 text-xs">
@@ -162,9 +162,7 @@ export function VoiceOnboardingPage() {
               {profileData.escape_clause && (
                 <div className="rounded-md bg-muted/50 p-3">
                   <p className="text-sm font-medium">When to break these rules</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {profileData.escape_clause}
-                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">{profileData.escape_clause}</p>
                 </div>
               )}
             </CardContent>

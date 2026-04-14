@@ -154,20 +154,12 @@ export function ProfilePage() {
                       Created {new Date(profile.created_at).toLocaleDateString()}
                     </p>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => navigate("/voice")}
-                  >
+                  <Button variant="ghost" size="sm" onClick={() => navigate("/voice")}>
                     View
                   </Button>
                 </div>
               ))}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate("/voice")}
-              >
+              <Button variant="outline" size="sm" onClick={() => navigate("/voice")}>
                 Create New Profile
               </Button>
             </div>

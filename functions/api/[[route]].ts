@@ -1194,11 +1194,7 @@ async function handleDeleteVoiceProfile(
   return json({ success: true });
 }
 
-async function handleAnalyzeVoice(
-  env: Env,
-  request: Request,
-  userId: string,
-): Promise<Response> {
+async function handleAnalyzeVoice(env: Env, request: Request, userId: string): Promise<Response> {
   const body = (await request.json()) as {
     samples: Array<{ text: string; source_url?: string }>;
     name?: string;
@@ -1233,10 +1229,13 @@ async function handleAnalyzeVoice(
 
   let profileDataRaw: string;
   try {
-    const aiResponse = await env.AI.run("@cf/meta/llama-3.1-70b-instruct" as BaseAiTextGenerationModels, {
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 2048,
-    });
+    const aiResponse = await env.AI.run(
+      "@cf/meta/llama-3.1-70b-instruct" as BaseAiTextGenerationModels,
+      {
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 2048,
+      },
+    );
 
     if (typeof aiResponse === "object" && aiResponse !== null && "response" in aiResponse) {
       profileDataRaw = (aiResponse as { response: string }).response;
@@ -1251,9 +1250,7 @@ async function handleAnalyzeVoice(
   // Parse and validate the AI response
   let profileData: unknown;
   try {
-    const cleaned = profileDataRaw
-      .replace(/^```(?:json)?\s*\n?/m, "")
-      .replace(/\n?```\s*$/m, "");
+    const cleaned = profileDataRaw.replace(/^```(?:json)?\s*\n?/m, "").replace(/\n?```\s*$/m, "");
     profileData = JSON.parse(cleaned);
   } catch {
     return error("Failed to parse voice analysis results. Please try again.", 500);
