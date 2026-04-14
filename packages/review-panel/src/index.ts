@@ -7,11 +7,41 @@ export type {
   ConsensusCluster,
   AggregatedReview,
   ReviewPanelOptions,
+  ScoringDimension,
+  DimensionScore,
+  DocumentScore,
+  ComparisonResult,
+  EloRating,
+  ScoreLogEntry,
+  ModelRole,
+  ModelRoleConfig,
+  ModelConfig,
 } from "./types.js";
 
 export { DEFAULT_PERSONAS, criticalEditor, domainExpert, generalReader, styleReviewer } from "./personas.js";
 export { buildPrompt, parseReviewResponse, runPersonaReview, runAllPersonas } from "./runner.js";
 export { textSimilarity, itemsRelated, clusterItems, aggregateReviews } from "./aggregator.js";
+export {
+  SCORING_DIMENSIONS,
+  buildScoringPrompt,
+  parseScoringResponse,
+  computeOverallScore,
+  scoreDocument,
+} from "./scoring.js";
+export {
+  buildComparisonPrompt,
+  parseComparisonResponse,
+  compareDocuments,
+  expectedScore,
+  updateEloRatings,
+  EloRanking,
+} from "./comparison.js";
+export {
+  DEFAULT_MODEL_CONFIG,
+  createModelConfig,
+  createCallModel,
+} from "./model-config.js";
+export { ScoreLog } from "./score-log.js";
 
 import type { AggregatedReview, ReviewPanelOptions } from "./types.js";
 import { DEFAULT_PERSONAS } from "./personas.js";
