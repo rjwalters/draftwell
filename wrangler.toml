@@ -7,7 +7,7 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "draftwell-db"
-database_id = "YOUR_DATABASE_ID"  # Replace with your actual D1 database ID
+database_id = "8859fa42-907a-4014-97e0-2fffb3d041be"
 
 # R2 bucket binding (document and review content storage)
 [[r2_buckets]]
@@ -17,7 +17,7 @@ bucket_name = "draftwell-content"
 # KV namespace binding (rate limiting)
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
-id = "YOUR_KV_NAMESPACE_ID"  # Replace with your actual KV namespace ID
+id = "08f8937b58104f319651b204d60ea887"
 
 # Environment variables (add secrets via `wrangler secret put`)
 [vars]
