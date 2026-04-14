@@ -7,16 +7,13 @@ import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
 
 export function SettingsPage() {
-  const { logout } = useAuth();
+  const { deleteAccount } = useAuth();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState(true);
 
   const handleDeleteAccount = async () => {
-    // In a real app, this would call DELETE /api/profile
-    // For demo, we just logout and navigate
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    await logout();
+    await deleteAccount();
     navigate("/");
   };
 

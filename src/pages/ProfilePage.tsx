@@ -7,7 +7,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useVoiceProfile } from "@/hooks/use-voice-profile";
 
 export function ProfilePage() {
-  const { user } = useAuth();
+  const { user, updateProfile } = useAuth();
   const navigate = useNavigate();
   const { profiles, isLoading: profilesLoading } = useVoiceProfile();
   const [isEditing, setIsEditing] = useState(false);
@@ -22,14 +22,14 @@ export function ProfilePage() {
     setMessage(null);
 
     try {
-      // In a real app, this would call PUT /api/profile
-      // For demo, we just simulate success
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
+      await updateProfile(name.trim());
       setMessage({ type: "success", text: "Profile updated successfully" });
       setIsEditing(false);
-    } catch {
-      setMessage({ type: "error", text: "Failed to update profile" });
+    } catch (err) {
+      setMessage({
+        type: "error",
+        text: err instanceof Error ? err.message : "Failed to update profile",
+      });
     } finally {
       setIsSaving(false);
     }

@@ -300,6 +300,73 @@ async function handleGetMe(env: Env, request: Request): Promise<Response> {
   return json({ user });
 }
 
+async function handleUpdateMe(env: Env, request: Request): Promise<Response> {
+  const user = await getAuthenticatedUser(env, request);
+  if (!user) return error("Not authenticated", 401);
+
+  const body = (await request.json()) as { name?: string };
+  const { name } = body;
+
+  if (!name || !name.trim()) {
+    return error("Name is required");
+  }
+
+  await env.DB.prepare("UPDATE users SET name = ?, updated_at = datetime('now') WHERE id = ?")
+    .bind(name.trim(), user.id)
+    .run();
+
+  return json({ user: { id: user.id, email: user.email, name: name.trim() } });
+}
+
+async function handleDeleteMe(env: Env, request: Request): Promise<Response> {
+  const user = await getAuthenticatedUser(env, request);
+  if (!user) return error("Not authenticated", 401);
+
+  // Delete user — cascades to sessions, projects, documents, reviews, revisions
+  // via ON DELETE CASCADE foreign keys.
+  // Also clean up R2 objects for the user's documents and reviews.
+  const { results: projects } = await env.DB.prepare(
+    "SELECT id FROM projects WHERE user_id = ?",
+  )
+    .bind(user.id)
+    .all<{ id: string }>();
+
+  for (const project of projects) {
+    const { results: documents } = await env.DB.prepare(
+      "SELECT r2_key FROM documents WHERE project_id = ?",
+    )
+      .bind(project.id)
+      .all<{ r2_key: string }>();
+
+    const { results: reviews } = await env.DB.prepare(
+      "SELECT r.r2_key FROM reviews r JOIN documents d ON r.document_id = d.id WHERE d.project_id = ?",
+    )
+      .bind(project.id)
+      .all<{ r2_key: string }>();
+
+    const { results: revisions } = await env.DB.prepare(
+      "SELECT rv.r2_key FROM revisions rv JOIN documents d ON rv.document_id = d.id WHERE d.project_id = ?",
+    )
+      .bind(project.id)
+      .all<{ r2_key: string }>();
+
+    const r2Keys = [
+      ...documents.map((d) => d.r2_key),
+      ...reviews.map((r) => r.r2_key),
+      ...revisions.map((r) => r.r2_key),
+    ];
+
+    for (const key of r2Keys) {
+      await env.CONTENT_BUCKET.delete(key);
+    }
+  }
+
+  // Delete user row — cascades delete sessions, projects, documents, reviews, etc.
+  await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(user.id).run();
+
+  return json({ success: true }, 200, { "Set-Cookie": clearSessionCookie() });
+}
+
 async function handleRefreshSession(env: Env, request: Request): Promise<Response> {
   const sessionId = getSessionIdFromCookie(request);
 
@@ -1448,6 +1515,14 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 
     if (path === "/api/auth/me" && method === "GET") {
       return handleGetMe(env, request);
+    }
+
+    if (path === "/api/auth/me" && method === "PUT") {
+      return handleUpdateMe(env, request);
+    }
+
+    if (path === "/api/auth/me" && method === "DELETE") {
+      return handleDeleteMe(env, request);
     }
 
     if (path === "/api/auth/refresh" && method === "POST") {

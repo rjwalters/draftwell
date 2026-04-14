@@ -1,8 +1,105 @@
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
 
+interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+}
+
+interface Document {
+  id: string;
+  project_id: string;
+  title: string;
+  current_revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export function DashboardPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [documentCount, setDocumentCount] = useState(0);
+  const [recentActivity, setRecentActivity] = useState<{ action: string; time: string }[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchDashboardData = useCallback(async () => {
+    if (!user) return;
+
+    try {
+      const projectsRes = await fetch("/api/projects", { credentials: "include" });
+      if (!projectsRes.ok) return;
+      const projectsData = await projectsRes.json();
+      const allProjects: Project[] = projectsData.projects || [];
+      setProjects(allProjects);
+
+      // Fetch documents for each project to get total count and recent activity
+      let totalDocs = 0;
+      const allDocs: (Document & { projectName: string })[] = [];
+
+      for (const project of allProjects) {
+        const docsRes = await fetch(`/api/projects/${project.id}/documents`, {
+          credentials: "include",
+        });
+        if (docsRes.ok) {
+          const docsData = await docsRes.json();
+          const docs: Document[] = docsData.documents || [];
+          totalDocs += docs.length;
+          for (const doc of docs) {
+            allDocs.push({ ...doc, projectName: project.name });
+          }
+        }
+      }
+      setDocumentCount(totalDocs);
+
+      // Build recent activity from projects and documents, sorted by most recent
+      const activities: { action: string; time: string; date: Date }[] = [];
+
+      for (const project of allProjects) {
+        activities.push({
+          action: `Created project "${project.name}"`,
+          time: formatRelativeTime(new Date(project.created_at)),
+          date: new Date(project.created_at),
+        });
+      }
+
+      for (const doc of allDocs) {
+        activities.push({
+          action: `Added "${doc.title}" to ${doc.projectName}`,
+          time: formatRelativeTime(new Date(doc.created_at)),
+          date: new Date(doc.created_at),
+        });
+      }
+
+      activities.sort((a, b) => b.date.getTime() - a.date.getTime());
+      setRecentActivity(activities.slice(0, 5).map(({ action, time }) => ({ action, time })));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, [fetchDashboardData]);
+
+  const activeProjects = projects.filter((p) => p.status === "active").length;
+
+  if (isLoading) {
+    return (
+      <div className="space-y-8">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -11,96 +108,36 @@ export function DashboardPage() {
         <p className="text-muted-foreground">Welcome back, {user?.name}!</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Projects</CardTitle>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              className="h-4 w-4 text-muted-foreground"
-            >
-              <title>Total Projects</title>
-              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-            </svg>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">3</div>
-            <p className="text-xs text-muted-foreground">+2 from last month</p>
+            <div className="text-2xl font-bold">{projects.length}</div>
+            <p className="text-xs text-muted-foreground">
+              {activeProjects} active
+            </p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Tasks</CardTitle>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              className="h-4 w-4 text-muted-foreground"
-            >
-              <title>Active Tasks</title>
-              <rect width="20" height="14" x="2" y="5" rx="2" />
-              <path d="M2 10h20" />
-            </svg>
+            <CardTitle className="text-sm font-medium">Total Documents</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">12</div>
-            <p className="text-xs text-muted-foreground">4 due this week</p>
+            <div className="text-2xl font-bold">{documentCount}</div>
+            <p className="text-xs text-muted-foreground">
+              Across all projects
+            </p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Completed</CardTitle>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              className="h-4 w-4 text-muted-foreground"
-            >
-              <title>Completed</title>
-              <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-            </svg>
+            <CardTitle className="text-sm font-medium">Account</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">24</div>
-            <p className="text-xs text-muted-foreground">+8 this month</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Uptime</CardTitle>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              className="h-4 w-4 text-muted-foreground"
-            >
-              <title>Uptime</title>
-              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-            </svg>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">99.9%</div>
-            <p className="text-xs text-muted-foreground">Last 30 days</p>
+            <div className="text-2xl font-bold truncate">{user?.email}</div>
+            <p className="text-xs text-muted-foreground">{user?.name}</p>
           </CardContent>
         </Card>
       </div>
@@ -112,22 +149,23 @@ export function DashboardPage() {
             <CardDescription>Your recent project activity</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {[
-                { action: "Created new project", time: "2 hours ago" },
-                { action: "Deployed to production", time: "4 hours ago" },
-                { action: "Updated database schema", time: "Yesterday" },
-                { action: "Added new team member", time: "2 days ago" },
-              ].map((item) => (
-                <div key={item.action} className="flex items-center">
-                  <div className="h-2 w-2 rounded-full bg-primary mr-3" />
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">{item.action}</p>
-                    <p className="text-xs text-muted-foreground">{item.time}</p>
+            {recentActivity.length > 0 ? (
+              <div className="space-y-4">
+                {recentActivity.map((item) => (
+                  <div key={`${item.action}-${item.time}`} className="flex items-center">
+                    <div className="h-2 w-2 rounded-full bg-primary mr-3" />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">{item.action}</p>
+                      <p className="text-xs text-muted-foreground">{item.time}</p>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No activity yet. Create a project to get started.
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card className="col-span-3">
@@ -139,30 +177,48 @@ export function DashboardPage() {
             <button
               type="button"
               className="w-full text-left px-4 py-2 rounded-md hover:bg-accent transition-colors"
+              onClick={() => navigate("/projects")}
             >
-              Create new project
+              View projects
             </button>
             <button
               type="button"
               className="w-full text-left px-4 py-2 rounded-md hover:bg-accent transition-colors"
+              onClick={() => navigate("/voice")}
             >
-              Deploy changes
+              Voice profile
             </button>
             <button
               type="button"
               className="w-full text-left px-4 py-2 rounded-md hover:bg-accent transition-colors"
+              onClick={() => navigate("/profile")}
             >
-              View analytics
+              Edit profile
             </button>
             <button
               type="button"
               className="w-full text-left px-4 py-2 rounded-md hover:bg-accent transition-colors"
+              onClick={() => navigate("/settings")}
             >
-              Manage team
+              Settings
             </button>
           </CardContent>
         </Card>
       </div>
     </div>
   );
+}
+
+function formatRelativeTime(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMinutes = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMinutes < 1) return "Just now";
+  if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes === 1 ? "" : "s"} ago`;
+  if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? "" : "s"} ago`;
+  if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
+  return date.toLocaleDateString();
 }

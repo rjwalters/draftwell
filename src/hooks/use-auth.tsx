@@ -12,6 +12,8 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   register: (email: string, password: string, name: string) => Promise<void>;
+  updateProfile: (name: string) => Promise<void>;
+  deleteAccount: () => Promise<void>;
 }
 
 interface ApiError {
@@ -90,6 +92,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const updateProfile = useCallback(async (name: string) => {
+    const response = await fetchWithCredentials("/api/auth/me", {
+      method: "PUT",
+      body: JSON.stringify({ name }),
+    });
+
+    if (!response.ok) {
+      const data: ApiError = await response.json();
+      throw new Error(data.error || "Failed to update profile");
+    }
+
+    const data = await response.json();
+    setUser(data.user);
+  }, []);
+
+  const deleteAccount = useCallback(async () => {
+    const response = await fetchWithCredentials("/api/auth/me", {
+      method: "DELETE",
+    });
+
+    if (!response.ok) {
+      const data: ApiError = await response.json();
+      throw new Error(data.error || "Failed to delete account");
+    }
+
+    setUser(null);
+  }, []);
+
   const register = useCallback(async (email: string, password: string, name: string) => {
     setIsLoading(true);
     try {
@@ -111,7 +141,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout, register }}>
+    <AuthContext.Provider value={{ user, isLoading, login, logout, register, updateProfile, deleteAccount }}>
       {children}
     </AuthContext.Provider>
   );
