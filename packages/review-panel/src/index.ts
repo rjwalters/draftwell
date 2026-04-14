@@ -7,11 +7,43 @@ export type {
   ConsensusCluster,
   AggregatedReview,
   ReviewPanelOptions,
+  ScoringDimension,
+  DimensionScore,
+  DocumentScore,
+  ComparisonResult,
+  EloRating,
+  ScoreLogEntry,
+  ModelRole,
+  ModelRoleConfig,
+  ModelConfig,
+  VoiceDimensionRule,
+  VoiceProfileRules,
 } from "./types.js";
 
 export { DEFAULT_PERSONAS, criticalEditor, domainExpert, generalReader, styleReviewer } from "./personas.js";
 export { buildPrompt, parseReviewResponse, runPersonaReview, runAllPersonas } from "./runner.js";
 export { textSimilarity, itemsRelated, clusterItems, aggregateReviews } from "./aggregator.js";
+export {
+  SCORING_DIMENSIONS,
+  buildScoringPrompt,
+  parseScoringResponse,
+  computeOverallScore,
+  scoreDocument,
+} from "./scoring.js";
+export {
+  buildComparisonPrompt,
+  parseComparisonResponse,
+  compareDocuments,
+  expectedScore,
+  updateEloRatings,
+  EloRanking,
+} from "./comparison.js";
+export {
+  DEFAULT_MODEL_CONFIG,
+  createModelConfig,
+  createCallModel,
+} from "./model-config.js";
+export { ScoreLog } from "./score-log.js";
 
 import type { AggregatedReview, ReviewPanelOptions } from "./types.js";
 import { DEFAULT_PERSONAS } from "./personas.js";
@@ -51,6 +83,6 @@ export async function reviewDocument(
   const personas = options.personas ?? DEFAULT_PERSONAS;
   const threshold = options.consensusThreshold ?? 0.75;
 
-  const reviews = await runAllPersonas(personas, document, options.callModel);
+  const reviews = await runAllPersonas(personas, document, options.callModel, options.voiceProfile);
   return aggregateReviews(reviews, threshold);
 }

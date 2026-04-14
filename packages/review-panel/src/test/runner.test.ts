@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { buildPrompt, parseReviewResponse, runPersonaReview, runAllPersonas } from "../runner.js";
-import { criticalEditor, DEFAULT_PERSONAS } from "../personas.js";
+import { criticalEditor, DEFAULT_PERSONAS, styleReviewer } from "../personas.js";
 import type { Persona } from "../types.js";
 
 describe("buildPrompt", () => {
@@ -137,6 +137,49 @@ describe("runAllPersonas", () => {
     assert.ok(ids.includes("domain-expert"));
     assert.ok(ids.includes("general-reader"));
     assert.ok(ids.includes("style-reviewer"));
+  });
+});
+
+describe("buildPrompt with voice profile", () => {
+  it("injects voice profile section for style-reviewer persona", () => {
+    const voiceProfile = {
+      dimensions: [
+        { name: "Sentence length", observation: "Short sentences", rule: "Keep sentences under 20 words" },
+        { name: "Tone", observation: "Conversational", rule: "Use second person and contractions" },
+      ],
+      summary: "Concise, conversational writer",
+      escape_clause: "Technical sections may use longer sentences",
+    };
+
+    const prompt = buildPrompt(styleReviewer, "Test document", voiceProfile);
+
+    assert.ok(prompt.includes("voice profile"), "Should include voice profile section");
+    assert.ok(prompt.includes("Sentence length"), "Should include dimension name");
+    assert.ok(prompt.includes("Keep sentences under 20 words"), "Should include rule");
+    assert.ok(prompt.includes("Concise, conversational writer"), "Should include summary");
+    assert.ok(prompt.includes("Technical sections may use longer sentences"), "Should include escape clause");
+    assert.ok(!prompt.includes("{{voiceProfile}}"), "No unfilled voiceProfile placeholder");
+  });
+
+  it("does not inject voice profile for non-style-reviewer personas", () => {
+    const voiceProfile = {
+      dimensions: [
+        { name: "Tone", observation: "Formal", rule: "Use formal register" },
+      ],
+      summary: "Formal writer",
+      escape_clause: "None",
+    };
+
+    const prompt = buildPrompt(criticalEditor, "Test document", voiceProfile);
+
+    assert.ok(!prompt.includes("voice profile"), "Should not include voice profile for critical editor");
+  });
+
+  it("handles missing voice profile gracefully", () => {
+    const prompt = buildPrompt(styleReviewer, "Test document");
+
+    assert.ok(!prompt.includes("{{voiceProfile}}"), "No unfilled voiceProfile placeholder");
+    assert.ok(prompt.includes("Test document"), "Should include document");
   });
 });
 

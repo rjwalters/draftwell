@@ -1,0 +1,17 @@
+{
+  "pr_number": 36,
+  "issue": 29,
+  "context_type": "judge_feedback",
+  "judge_comments": [
+    {
+      "author": "rjwalters",
+      "body": "\u274c **Changes Requested**\n\n## Critical Issue\n\n**`node_modules` symlink committed to repository** \u2014 The diff includes a symlink `node_modules -> /Users/rwalters/GitHub/draftwell/node_modules`. This is tracked in git and must be removed:\n- Machine-specific absolute path will break for any other clone\n- `.gitignore` has `node_modules/` which ignores directories but not symlinks\n- Fix: `git rm --cached node_modules` and add `node_modules` (without trailing slash) to `.gitignore`, or keep the existing `.gitignore` entry and just remove the tracked file\n\n## Code Evaluation\n\nThe actual UI changes are well-executed:\n\n**Strengths:**\n- Warm, ink-inspired color palette (HSL 24/28\u00b0 primary) replaces generic shadcn defaults \u2014 fits the \"craft writing tool\" identity\n- Serif typography for headings creates clear visual hierarchy\n- Landing page workflow visualization (Draft \u2192 Review \u2192 Revise \u2192 Refine) communicates the product concept effectively\n- Reduced toolbar chrome in editor (smaller buttons, subtler borders, ghost variants) \u2014 good for a writing-focused tool\n- Dark mode palette feels intentional with warm undertones, not just inverted\n- Custom favicon with pen icon is a nice brand touch\n- Markdown preview has proper prose styling with serif headings and relaxed leading\n- Tests updated to match new content\n\n**Minor notes (non-blocking):**\n- PR has a single squashed commit labeled `[prior-run-checkpoint]` \u2014 commit message could be cleaner but not blocking\n\n## Test Execution\n\n**Strategy**: `vitest run` (full suite)\n**Result**: 138 tests passed, 2 pre-existing failures in `packages/review-panel` (empty test suites referencing worktree paths \u2014 not introduced by this PR)\n\n## Action Required\n\nRemove the `node_modules` symlink from version control, then this is ready for approval.",
+      "created_at": "2026-04-14T07:12:56Z"
+    },
+    {
+      "author": "rjwalters",
+      "body": "\u2705 Review feedback addressed:\n\n- Removed `node_modules` symlink from version control (`git rm --cached node_modules`)\n- Updated `.gitignore` from `node_modules/` to `node_modules` so it catches both symlinks and directories\n\nReady for re-review.",
+      "created_at": "2026-04-14T07:15:51Z"
+    }
+  ]
+}

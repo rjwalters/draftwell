@@ -48,6 +48,7 @@ dist/
 .loom/metrics/
 .loom/usage-cache.json
 .loom/claude-config/
+.loom/exit-codes/
 .loom/*.log
 .loom/*.sock
 .loom/logs/

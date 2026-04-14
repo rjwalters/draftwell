@@ -9,6 +9,7 @@ import { ProfilePage } from "@/pages/ProfilePage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { VoiceOnboardingPage } from "@/pages/VoiceOnboardingPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -47,6 +48,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <ProfilePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/voice"
+          element={
+            <ProtectedRoute>
+              <VoiceOnboardingPage />
             </ProtectedRoute>
           }
         />

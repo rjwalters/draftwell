@@ -109,6 +109,24 @@ export interface AggregatedReview {
 }
 
 /**
+ * A voice dimension rule extracted from a user's writing samples.
+ */
+export interface VoiceDimensionRule {
+  name: string;
+  observation: string;
+  rule: string;
+}
+
+/**
+ * A voice profile containing actionable style rules for personalized review.
+ */
+export interface VoiceProfileRules {
+  dimensions: VoiceDimensionRule[];
+  summary: string;
+  escape_clause: string;
+}
+
+/**
  * Options for configuring the review panel.
  */
 export interface ReviewPanelOptions {
@@ -118,4 +136,142 @@ export interface ReviewPanelOptions {
   consensusThreshold?: number;
   /** Function to call the AI model. Allows different backends (Claude API, local, etc.) */
   callModel: (prompt: string) => Promise<string>;
+  /** Optional voice profile rules to personalize the Style Reviewer persona. */
+  voiceProfile?: VoiceProfileRules;
+}
+
+// --- Calibrated Scoring Types ---
+
+/**
+ * A scoring dimension with calibration anchors that prevent score inflation.
+ * Each anchor gives the model a concrete reference point for what a given score means.
+ */
+export interface ScoringDimension {
+  /** Unique identifier (e.g., "clarity", "structure") */
+  id: string;
+  /** Display name */
+  name: string;
+  /** What this dimension measures */
+  description: string;
+  /** Calibration anchors mapping score values to concrete descriptions */
+  anchors: Record<number, string>;
+}
+
+/**
+ * A score for a single dimension, with mandatory weakness identification.
+ * No score without critique — the model must quote evidence from the document.
+ */
+export interface DimensionScore {
+  /** Which dimension was scored */
+  dimensionId: string;
+  /** Numeric score (1-10) */
+  score: number;
+  /** Brief justification for the score */
+  justification: string;
+  /** Identified weaknesses with quoted evidence from the document */
+  weaknesses: Array<{
+    /** Description of the weakness */
+    description: string;
+    /** Exact quote from the document demonstrating the weakness */
+    evidence: string;
+  }>;
+  /** Identified strengths (optional but encouraged) */
+  strengths?: string[];
+}
+
+/**
+ * Complete scored evaluation of a document across all dimensions.
+ */
+export interface DocumentScore {
+  /** Unique ID for this scoring session */
+  id: string;
+  /** Document identifier */
+  documentId: string;
+  /** Revision number that was scored */
+  revisionNumber: number;
+  /** Individual dimension scores */
+  dimensions: DimensionScore[];
+  /** Weighted overall score */
+  overallScore: number;
+  /** Model used for this evaluation */
+  model: string;
+  /** Timestamp */
+  createdAt: string;
+}
+
+/**
+ * Result of a head-to-head comparison between two document versions.
+ * Forced choice produces more reliable rankings than absolute scoring.
+ */
+export interface ComparisonResult {
+  /** ID of version A */
+  versionA: { documentId: string; revisionNumber: number };
+  /** ID of version B */
+  versionB: { documentId: string; revisionNumber: number };
+  /** Which version won ("A" | "B") — forced choice, no ties */
+  winner: "A" | "B";
+  /** Dimension-by-dimension comparison */
+  dimensionWins: Array<{
+    dimensionId: string;
+    winner: "A" | "B";
+    reasoning: string;
+  }>;
+  /** Overall reasoning for the choice */
+  reasoning: string;
+  /** Model used for comparison */
+  model: string;
+  /** Timestamp */
+  createdAt: string;
+}
+
+/**
+ * Elo rating for a document version, updated after each comparison.
+ */
+export interface EloRating {
+  documentId: string;
+  revisionNumber: number;
+  rating: number;
+  matchesPlayed: number;
+}
+
+/**
+ * A log entry tracking scores across revision cycles.
+ */
+export interface ScoreLogEntry {
+  documentId: string;
+  revisionNumber: number;
+  overallScore: number;
+  dimensionScores: Record<string, number>;
+  model: string;
+  createdAt: string;
+}
+
+// --- Model Configuration Types ---
+
+/** Role-based model configuration for writer/judge separation. */
+export type ModelRole = "writer" | "judge";
+
+/**
+ * Configuration for a specific model role.
+ * Different roles should use different models/temperatures to prevent
+ * self-congratulatory feedback loops.
+ */
+export interface ModelRoleConfig {
+  /** Model identifier (e.g., "claude-sonnet-4-20250514", "claude-opus-4-20250514") */
+  model: string;
+  /** Temperature setting (lower = more deterministic judgment) */
+  temperature: number;
+  /** Maximum tokens for response */
+  maxTokens: number;
+}
+
+/**
+ * Complete model configuration with writer/judge separation.
+ * The judge should default to a more capable model than the writer.
+ */
+export interface ModelConfig {
+  /** Model config for content generation / revision */
+  writer: ModelRoleConfig;
+  /** Model config for evaluation / scoring / comparison */
+  judge: ModelRoleConfig;
 }
