@@ -19,6 +19,15 @@ bucket_name = "draftwell-content"
 binding = "RATE_LIMIT"
 id = "08f8937b58104f319651b204d60ea887"
 
+# Workers AI binding (open source models)
+[ai]
+binding = "AI"
+
+# AI Gateway (route all model calls through gateway for logging/caching/analytics)
+# Gateway URL: https://gateway.ai.cloudflare.com/v1/251e6e8626d921603fdc3f0d75576bc6/draftwell
+# Create at: dash.cloudflare.com → AI → AI Gateway → "draftwell"
+
 # Environment variables (add secrets via `wrangler secret put`)
 [vars]
 APP_NAME = "Draftwell"
+AI_GATEWAY = "draftwell"
