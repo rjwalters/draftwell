@@ -1,11 +1,15 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/use-auth";
+import { useVoiceProfile } from "@/hooks/use-voice-profile";
 
 export function ProfilePage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const { profiles, isLoading: profilesLoading } = useVoiceProfile();
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(user?.name || "");
   const [isSaving, setIsSaving] = useState(false);
@@ -124,6 +128,57 @@ export function ProfilePage() {
               <code className="text-xs">{user.id}</code>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Voice Profile</CardTitle>
+          <CardDescription>
+            Your writing voice profile personalizes style reviews to match your unique voice.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {profilesLoading ? (
+            <p className="text-sm text-muted-foreground">Loading voice profiles...</p>
+          ) : profiles.length > 0 ? (
+            <div className="space-y-3">
+              {profiles.map((profile) => (
+                <div
+                  key={profile.id}
+                  className="flex items-center justify-between rounded-md border px-3 py-2"
+                >
+                  <div>
+                    <p className="text-sm font-medium">{profile.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Created {new Date(profile.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => navigate("/voice")}
+                  >
+                    View
+                  </Button>
+                </div>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate("/voice")}
+              >
+                Create New Profile
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                No voice profile yet. Create one to get personalized style reviews.
+              </p>
+              <Button onClick={() => navigate("/voice")}>Set Up Voice Profile</Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

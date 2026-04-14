@@ -4,6 +4,7 @@ import type {
   ReviewItem,
   Category,
   Severity,
+  VoiceProfileRules,
 } from "./types.js";
 
 const VALID_CATEGORIES: Set<string> = new Set([
@@ -16,12 +17,44 @@ const VALID_SEVERITIES: Set<string> = new Set([
 ]);
 
 /**
+ * Format voice profile rules into a prompt section for the Style Reviewer.
+ */
+function formatVoiceProfileSection(voiceProfile: VoiceProfileRules): string {
+  const rules = voiceProfile.dimensions
+    .map((d) => `- **${d.name}**: ${d.rule}`)
+    .join("\n");
+
+  return `
+IMPORTANT: The author has a defined voice profile. Evaluate this document against these personalized voice rules:
+
+Voice summary: ${voiceProfile.summary}
+
+Voice rules:
+${rules}
+
+Note: ${voiceProfile.escape_clause}
+
+Flag any passages that diverge from the author's established voice, but respect the escape clause above — not every deviation is a problem.
+`;
+}
+
+/**
  * Build the prompt for a persona by filling in template placeholders.
  */
-export function buildPrompt(persona: Persona, document: string): string {
+export function buildPrompt(
+  persona: Persona,
+  document: string,
+  voiceProfile?: VoiceProfileRules,
+): string {
+  let voiceSection = "";
+  if (voiceProfile && persona.id === "style-reviewer") {
+    voiceSection = formatVoiceProfileSection(voiceProfile);
+  }
+
   return persona.promptTemplate
     .replace("{{perspective}}", persona.perspective)
     .replace("{{dimensions}}", persona.dimensions.map((d) => `- ${d}`).join("\n"))
+    .replace("{{voiceProfile}}", voiceSection)
     .replace("{{document}}", document);
 }
 
@@ -88,8 +121,9 @@ export async function runPersonaReview(
   persona: Persona,
   document: string,
   callModel: (prompt: string) => Promise<string>,
+  voiceProfile?: VoiceProfileRules,
 ): Promise<PersonaReview> {
-  const prompt = buildPrompt(persona, document);
+  const prompt = buildPrompt(persona, document, voiceProfile);
   const raw = await callModel(prompt);
   const { summary, items } = parseReviewResponse(persona.id, raw);
 
@@ -109,9 +143,10 @@ export async function runAllPersonas(
   personas: Persona[],
   document: string,
   callModel: (prompt: string) => Promise<string>,
+  voiceProfile?: VoiceProfileRules,
 ): Promise<PersonaReview[]> {
   const reviews = await Promise.all(
-    personas.map((persona) => runPersonaReview(persona, document, callModel)),
+    personas.map((persona) => runPersonaReview(persona, document, callModel, voiceProfile)),
   );
   return reviews;
 }
