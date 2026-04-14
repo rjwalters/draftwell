@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { Download } from "lucide-react";
 import { MarkdownEditor } from "@/components/MarkdownEditor";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { ReviewPanel } from "@/components/ReviewPanel";
@@ -20,6 +21,7 @@ export function DocumentEditPage() {
     documentId: string;
   }>();
   const [content, setContent] = useState("");
+  const [title, setTitle] = useState("Document");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
@@ -41,6 +43,7 @@ export function DocumentEditPage() {
         if (!response.ok) throw new Error("Failed to load document");
         const data = await response.json();
         setContent(data.content ?? "");
+        if (data.document?.title) setTitle(data.document.title);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load document");
       } finally {
@@ -81,6 +84,11 @@ export function DocumentEditPage() {
     setContent(newContent);
     setSaveStatus("saved"); // Revision already saved server-side
   }, []);
+
+  const handleExportPdf = useCallback(async () => {
+    const { exportToPdf } = await import("@/lib/pdf-export");
+    exportToPdf(content, title);
+  }, [content, title]);
 
   const handleRevision = useCallback((result: RevisionResult) => {
     setDiffView({
@@ -160,6 +168,16 @@ export function DocumentEditPage() {
             }}
           >
             Review
+          </Button>
+          <div className="mx-2 h-5 w-px bg-border" />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs px-2.5"
+            onClick={handleExportPdf}
+          >
+            <Download className="mr-1 h-3.5 w-3.5" />
+            Export PDF
           </Button>
         </div>
       </div>
