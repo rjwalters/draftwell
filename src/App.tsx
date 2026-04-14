@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "@/components/Layout";
 import { useAuth } from "@/hooks/use-auth";
 import { DashboardPage } from "@/pages/DashboardPage";
+import { DocumentEditPage } from "@/pages/DocumentEditPage";
 import { HomePage } from "@/pages/HomePage";
 import { LoginPage } from "@/pages/LoginPage";
 import { ProfilePage } from "@/pages/ProfilePage";
@@ -70,6 +71,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <ProjectDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/projects/:projectId/documents/:documentId/edit"
+          element={
+            <ProtectedRoute>
+              <DocumentEditPage />
             </ProtectedRoute>
           }
         />
