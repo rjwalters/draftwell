@@ -1,17 +1,19 @@
 {
   "name": "@draftwell/styleguide",
   "version": "0.1.0",
-  "description": "Tiered anti-slop styleguide with mechanical detection",
+  "description": "Anti-slop styleguide and language discipline rules for draftwell's review pipeline",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "test": "node --test dist/**/*.test.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "check": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^2.0.0"
   }
 }

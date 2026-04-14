@@ -4,8 +4,9 @@
  * - error: Kill-on-sight. Always wrong in any context (e.g., "delve", chatbot artifacts).
  * - warning: Suspicious in clusters. One occurrence is fine; multiple indicate AI slop.
  * - info: Style suggestions. Not wrong per se but worth flagging for author awareness.
+ * - suggestion: Language discipline suggestion from Orwell/Zinsser/Ogilvy rules.
  */
-export type Severity = "error" | "warning" | "info";
+export type Severity = "error" | "warning" | "info" | "suggestion";
 
 /**
  * Categories of AI writing patterns.
@@ -134,4 +135,64 @@ export interface CheckReport {
   results: CheckResult[];
   /** Structural analysis results */
   structuralResults: StructuralCheckResult[];
+}
+
+// -- Language discipline types (Orwell, Zinsser, Ogilvy) --
+
+/** Framework source for a language discipline rule. */
+export type Framework = "orwell" | "zinsser" | "ogilvy";
+
+/** A single finding produced by a discipline rule check. */
+export interface Finding {
+  ruleId: string;
+  framework: Framework;
+  severity: Severity;
+  message: string;
+  /** The matched text that triggered the finding. */
+  matched: string;
+  /** Suggested replacement, if applicable. */
+  replacement?: string;
+  /** Character offset in the input text. */
+  offset: number;
+  /** Length of the matched span. */
+  length: number;
+}
+
+/** A reviewable language discipline rule with a testable check function. */
+export interface DisciplineRule {
+  id: string;
+  name: string;
+  description: string;
+  framework: Framework;
+  severity: Severity;
+  /**
+   * Check the input text and return any findings.
+   * Rules should return an empty array if no issues are found.
+   */
+  check(text: string): Finding[];
+}
+
+/**
+ * Zinsser's three revision passes, usable as a revision mode option.
+ * Each pass has a name, goal, and set of rules to apply.
+ */
+export interface RevisionPass {
+  id: string;
+  name: string;
+  goal: string;
+  /** Rule IDs to apply during this pass. */
+  ruleIds: string[];
+}
+
+/** Result of running the discipline checker against a document. */
+export interface DisciplineResult {
+  findings: Finding[];
+  /** Total number of words in the input. */
+  wordCount: number;
+  /**
+   * Escape clause reminder: "Break any rule rather than write something
+   * barbarous." Every result carries this so reviewers remember that
+   * mechanical rules are guidelines, not absolutes.
+   */
+  escapeClause: string;
 }
