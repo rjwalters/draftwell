@@ -1069,6 +1069,7 @@ async function handleGenerateRevision(
         .bind(newStatus, openItems[itemIndex].id)
         .run();
     }
+  }
 
   return json(
     {
