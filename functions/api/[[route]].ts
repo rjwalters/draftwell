@@ -22,6 +22,7 @@ interface Env {
   APP_NAME: string;
   ANTHROPIC_API_KEY: string;
   AI_GATEWAY: string;
+  AI_GATEWAY_TOKEN: string;
 }
 
 interface VoiceProfile {
@@ -787,6 +788,7 @@ async function handleGenerateReview(
     const response = await callClaudeAPI(prompt, apiKey, {
       maxTokens: 4096,
       gatewayUrl: getGatewayUrl(env),
+      gatewayToken: env.AI_GATEWAY_TOKEN,
     });
     const result = parseReviewResponse(response);
     allItems.push(...result.items);
@@ -1030,6 +1032,7 @@ async function handleGenerateRevision(
   const response = await callClaudeAPI(prompt, apiKey, {
     maxTokens: 8192,
     gatewayUrl: getGatewayUrl(env),
+    gatewayToken: env.AI_GATEWAY_TOKEN,
   });
   const result = parseRevisionResponse(response);
 
@@ -1356,6 +1359,7 @@ async function handleGenerateRefinement(
   const response = await callClaudeAPI(prompt, apiKey, {
     maxTokens: 8192,
     gatewayUrl: getGatewayUrl(env),
+    gatewayToken: env.AI_GATEWAY_TOKEN,
   });
   const result = parseRevisionResponse(response);
 

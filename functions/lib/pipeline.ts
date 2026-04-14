@@ -413,6 +413,7 @@ export async function callClaudeAPI(
     model?: string;
     maxTokens?: number;
     gatewayUrl?: string;
+    gatewayToken?: string;
   } = {},
 ): Promise<string> {
   const model = options.model ?? "claude-sonnet-4-20250514";
@@ -423,13 +424,20 @@ export async function callClaudeAPI(
     ? `${options.gatewayUrl}/anthropic`
     : "https://api.anthropic.com";
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "x-api-key": apiKey,
+    "anthropic-version": "2023-06-01",
+  };
+
+  // Authenticate with Cloudflare AI Gateway when using gateway routing
+  if (options.gatewayUrl && options.gatewayToken) {
+    headers["cf-aig-authorization"] = `Bearer ${options.gatewayToken}`;
+  }
+
   const response = await fetch(`${baseUrl}/v1/messages`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
+    headers,
     body: JSON.stringify({
       model,
       max_tokens: maxTokens,
