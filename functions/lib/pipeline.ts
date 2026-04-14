@@ -374,7 +374,7 @@ export function buildRefinementPrompt(
 
 Focus specifically on resolving these remaining items. Do not make changes unrelated to these items.
 
-${buildRevisionPrompt(document, openItems).split("Review items to address:")[1] ? "" : ""}Respond in the same format:
+Respond in the same format:
 
 REVISED_DOCUMENT_START
 [your refined document here]
