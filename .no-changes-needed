@@ -1,0 +1,8 @@
+The 21 stale worktrees listed in the issue were already removed prior to this run.
+Remaining cleanup performed (no code changes):
+- Deleted stale local branch loom/issue-51 (issue closed, PR merged)
+- Deleted stale local branch docs/guide-update-20260414 (PR closed)
+- Pruned stale remote tracking ref origin/feature/loom-installation
+- Kept docs/guide-update-20260414-200000 (has open PR #59)
+- Kept feature/issue-57 worktree (issue still open)
+All cleanup is git operations, not code changes — no PR needed.
