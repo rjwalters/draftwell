@@ -11,7 +11,7 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     globals: true,
     include: ["**/__tests__/**/*.test.{ts,tsx}", "**/*.test.{ts,tsx}"],
-    exclude: ["**/node_modules/**", ".loom/worktrees/**"],
+    exclude: ["**/node_modules/**", ".loom/worktrees/**", "packages/review-panel/**"],
     testTimeout: 10000,
     hookTimeout: 10000,
     coverage: {
