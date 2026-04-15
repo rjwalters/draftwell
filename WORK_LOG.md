@@ -2,6 +2,14 @@
 
 Chronological record of merged PRs and closed issues.
 
+### 2026-04-15
+
+- **PR #64**: Install Loom 0.4.1 orchestration framework (Closes #58)
+- **PR #63**: refactor: remove unused src/pipeline/ directory (2,014 LOC)
+- **PR #62**: fix: exclude review-panel from vitest test discovery (Closes #50)
+- **PR #61**: feat: wire styleguide and review-panel packages into live API (Closes #51)
+- **PR #60**: fix: remove unauthenticated user API endpoints (Closes #52)
+
 ### 2026-04-14
 
 - **PR #56**: refactor: split API route monolith into domain modules (Closes #49)
