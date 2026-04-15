@@ -1,6 +1,6 @@
+import { Download } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Download } from "lucide-react";
 import { MarkdownEditor } from "@/components/MarkdownEditor";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { ReviewPanel } from "@/components/ReviewPanel";
@@ -200,7 +200,9 @@ export function DocumentEditPage() {
         {/* Editor area */}
         <div className={`flex min-h-0 ${showReview ? "w-2/3" : "w-full"}`}>
           {viewMode !== "preview" && (
-            <div className={`min-h-0 ${viewMode === "split" ? "w-1/2 border-r border-border/50" : "w-full"}`}>
+            <div
+              className={`min-h-0 ${viewMode === "split" ? "w-1/2 border-r border-border/50" : "w-full"}`}
+            >
               <MarkdownEditor value={content} onChange={handleChange} />
             </div>
           )}

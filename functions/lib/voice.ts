@@ -1,5 +1,5 @@
+import { error, json } from "./shared";
 import type { Env, VoiceProfile, VoiceSample } from "./types";
-import { json, error } from "./shared";
 
 const VOICE_DIMENSIONS = [
   "Sentence structure and length patterns",
@@ -107,7 +107,11 @@ export async function handleDeleteVoiceProfile(
   return json({ success: true });
 }
 
-export async function handleAnalyzeVoice(env: Env, request: Request, userId: string): Promise<Response> {
+export async function handleAnalyzeVoice(
+  env: Env,
+  request: Request,
+  userId: string,
+): Promise<Response> {
   const body = (await request.json()) as {
     samples: Array<{ text: string; source_url?: string }>;
     name?: string;

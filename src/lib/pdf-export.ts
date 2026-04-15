@@ -47,12 +47,9 @@ function addPageNumber(state: PdfState): void {
   state.doc.setFontSize(FONT_SIZES.small);
   state.doc.setFont("helvetica", "normal");
   state.doc.setTextColor(150, 150, 150);
-  state.doc.text(
-    `${state.pageNumber}`,
-    state.pageWidth / 2,
-    state.pageHeight - 10,
-    { align: "center" },
-  );
+  state.doc.text(`${state.pageNumber}`, state.pageWidth / 2, state.pageHeight - 10, {
+    align: "center",
+  });
   state.doc.setTextColor(0, 0, 0);
 }
 
@@ -90,8 +87,7 @@ function renderHeading(state: PdfState, token: Tokens.Heading): void {
   const depth = token.depth as 1 | 2 | 3 | 4;
   const sizeKey = depth <= 4 ? (`h${depth}` as keyof typeof FONT_SIZES) : "h4";
   const fontSize = FONT_SIZES[sizeKey];
-  const lineHeight =
-    LINE_HEIGHTS[sizeKey as keyof typeof LINE_HEIGHTS] ?? LINE_HEIGHTS.body;
+  const lineHeight = LINE_HEIGHTS[sizeKey as keyof typeof LINE_HEIGHTS] ?? LINE_HEIGHTS.body;
 
   state.y += HEADER_SPACE;
   ensureSpace(state, lineHeight + 4);
@@ -103,12 +99,7 @@ function renderHeading(state: PdfState, token: Tokens.Heading): void {
   if (depth <= 2) {
     state.doc.setDrawColor(200, 200, 200);
     state.doc.setLineWidth(depth === 1 ? 0.5 : 0.3);
-    state.doc.line(
-      state.margin,
-      state.y - 1,
-      state.margin + state.contentWidth,
-      state.y - 1,
-    );
+    state.doc.line(state.margin, state.y - 1, state.margin + state.contentWidth, state.y - 1);
     state.y += 3;
   }
 
@@ -132,14 +123,7 @@ function renderList(state: PdfState, token: Tokens.List): void {
     state.doc.setFont("helvetica", "normal");
     state.doc.text(bullet, state.margin + 4, state.y);
 
-    renderWrappedText(
-      state,
-      text,
-      FONT_SIZES.body,
-      LINE_HEIGHTS.body,
-      "normal",
-      12,
-    );
+    renderWrappedText(state, text, FONT_SIZES.body, LINE_HEIGHTS.body, "normal", 12);
     state.y += 1;
   }
   state.y += PARAGRAPH_SPACE;
@@ -158,13 +142,7 @@ function renderCode(state: PdfState, token: Tokens.Code): void {
   state.doc.setFillColor(245, 245, 245);
   const remainingHeight = state.pageHeight - MARGIN - 15 - state.y;
   const bgHeight = Math.min(blockHeight, remainingHeight);
-  state.doc.rect(
-    state.margin,
-    state.y - 2,
-    state.contentWidth,
-    bgHeight,
-    "F",
-  );
+  state.doc.rect(state.margin, state.y - 2, state.contentWidth, bgHeight, "F");
 
   state.doc.setFontSize(9);
   state.doc.setFont("courier", "normal");
@@ -194,14 +172,7 @@ function renderBlockquote(state: PdfState, token: Tokens.Blockquote): void {
     .join("\n");
 
   state.doc.setTextColor(100, 100, 100);
-  renderWrappedText(
-    state,
-    text,
-    FONT_SIZES.body,
-    LINE_HEIGHTS.body,
-    "italic",
-    10,
-  );
+  renderWrappedText(state, text, FONT_SIZES.body, LINE_HEIGHTS.body, "italic", 10);
   state.doc.setTextColor(0, 0, 0);
 
   state.doc.line(state.margin + 3, startY - 2, state.margin + 3, state.y);
@@ -213,12 +184,7 @@ function renderHr(state: PdfState): void {
   ensureSpace(state, 8);
   state.doc.setDrawColor(200, 200, 200);
   state.doc.setLineWidth(0.3);
-  state.doc.line(
-    state.margin,
-    state.y,
-    state.margin + state.contentWidth,
-    state.y,
-  );
+  state.doc.line(state.margin, state.y, state.margin + state.contentWidth, state.y);
   state.y += 8;
 }
 
@@ -334,12 +300,9 @@ export function exportToPdf(markdown: string, title: string): void {
   state.y += 12;
 
   // Handle image placeholders by pre-processing
-  const processedMarkdown = markdown.replace(
-    /!\[([^\]]*)\]\([^)]+\)/g,
-    (_match, alt) => {
-      return `<!--img:${alt}-->`;
-    },
-  );
+  const processedMarkdown = markdown.replace(/!\[([^\]]*)\]\([^)]+\)/g, (_match, alt) => {
+    return `<!--img:${alt}-->`;
+  });
 
   // Tokenize markdown
   const lexer = new Lexer();

@@ -1,5 +1,5 @@
+import { error, json } from "./shared";
 import type { Env, Project } from "./types";
-import { json, error } from "./shared";
 
 export async function verifyProjectOwnership(
   env: Env,
@@ -34,7 +34,11 @@ export async function handleGetProject(env: Env, id: string, userId: string): Pr
   return json({ project });
 }
 
-export async function handleCreateProject(env: Env, request: Request, userId: string): Promise<Response> {
+export async function handleCreateProject(
+  env: Env,
+  request: Request,
+  userId: string,
+): Promise<Response> {
   const body = (await request.json()) as { name?: string; description?: string };
   const { name, description } = body;
 

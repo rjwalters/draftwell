@@ -115,9 +115,7 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{projects.length}</div>
-            <p className="text-xs text-muted-foreground">
-              {activeProjects} active
-            </p>
+            <p className="text-xs text-muted-foreground">{activeProjects} active</p>
           </CardContent>
         </Card>
         <Card>
@@ -126,9 +124,7 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{documentCount}</div>
-            <p className="text-xs text-muted-foreground">
-              Across all projects
-            </p>
+            <p className="text-xs text-muted-foreground">Across all projects</p>
           </CardContent>
         </Card>
         <Card>
