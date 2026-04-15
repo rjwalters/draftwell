@@ -1,47 +1,46 @@
 // Cloudflare Pages Functions API handler
 // Thin router that dispatches to domain modules
 
-import type { Env } from "../lib/types";
-import { error } from "../lib/shared";
 import {
-  getAuthenticatedUser,
-  handleLogin,
-  handleLogout,
-  handleRegister,
-  handleGetMe,
-  handleUpdateMe,
-  handleDeleteMe,
-  handleRefreshSession,
-  handleHealthCheck,
-} from "../lib/auth";
-import { handleGetUsers, handleGetUser, handleCreateUser } from "../lib/users";
-import {
-  handleGetProjects,
-  handleGetProject,
-  handleCreateProject,
-  handleUpdateProject,
-  handleDeleteProject,
-} from "../lib/projects";
-import {
-  handleGetDocuments,
-  handleGetDocument,
-  handleCreateDocument,
-  handleUpdateDocument,
-  handleDeleteDocument,
-} from "../lib/documents";
-import {
-  handleGenerateReview,
-  handleGetReviews,
-  handleGetReview,
-  handleUpdateReviewItem,
-  handleGenerateRevision,
   handleGenerateRefinement,
+  handleGenerateReview,
+  handleGenerateRevision,
+  handleGetReview,
+  handleGetReviews,
+  handleUpdateReviewItem,
 } from "../lib/ai";
 import {
-  handleGetVoiceProfiles,
-  handleGetVoiceProfile,
-  handleDeleteVoiceProfile,
+  getAuthenticatedUser,
+  handleDeleteMe,
+  handleGetMe,
+  handleHealthCheck,
+  handleLogin,
+  handleLogout,
+  handleRefreshSession,
+  handleRegister,
+  handleUpdateMe,
+} from "../lib/auth";
+import {
+  handleCreateDocument,
+  handleDeleteDocument,
+  handleGetDocument,
+  handleGetDocuments,
+  handleUpdateDocument,
+} from "../lib/documents";
+import {
+  handleCreateProject,
+  handleDeleteProject,
+  handleGetProject,
+  handleGetProjects,
+  handleUpdateProject,
+} from "../lib/projects";
+import { error } from "../lib/shared";
+import type { Env } from "../lib/types";
+import {
   handleAnalyzeVoice,
+  handleDeleteVoiceProfile,
+  handleGetVoiceProfile,
+  handleGetVoiceProfiles,
 } from "../lib/voice";
 
 // Main request handler
@@ -86,20 +85,6 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 
     if (path === "/api/auth/refresh" && method === "POST") {
       return handleRefreshSession(env, request);
-    }
-
-    // Users endpoints
-    if (path === "/api/users" && method === "GET") {
-      return handleGetUsers(env);
-    }
-
-    if (path === "/api/users" && method === "POST") {
-      return handleCreateUser(env, request);
-    }
-
-    const userMatch = path.match(/^\/api\/users\/([^/]+)$/);
-    if (userMatch && method === "GET") {
-      return handleGetUser(env, userMatch[1]);
     }
 
     // Projects endpoints (require authentication via session cookie)
