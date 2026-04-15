@@ -1,18 +1,17 @@
-import type { Env, Document } from "./types";
-import { json, error } from "./shared";
-import { verifyProjectOwnership } from "./projects";
+import { compareDocuments, EloRanking } from "../../packages/review-panel/src/comparison";
+import { reviewDocument } from "../../packages/review-panel/src/index";
+import { scoreDocument } from "../../packages/review-panel/src/scoring";
+import { check, defaultStyleguide } from "../../packages/styleguide/src/index";
 import {
-  buildReviewPrompt,
-  buildRevisionPrompt,
   buildRefinementPrompt,
+  buildRevisionPrompt,
   callClaudeAPI,
-  chunkSections,
   estimateTokens,
-  parseReviewResponse,
   parseRevisionResponse,
-  parseSections,
-  type ReviewItemResult,
 } from "./pipeline";
+import { verifyProjectOwnership } from "./projects";
+import { error, json } from "./shared";
+import type { Document, Env } from "./types";
 
 /** Get the Claude API key from request header or environment */
 function getApiKey(env: Env, request: Request): string | null {
@@ -27,6 +26,30 @@ function getGatewayUrl(env: Env): string | undefined {
     return `https://gateway.ai.cloudflare.com/v1/${env.AI_GATEWAY}`;
   }
   return undefined;
+}
+
+/** Map review-panel severity to DB severity */
+function mapSeverity(severity: string): "error" | "warning" | "suggestion" {
+  switch (severity) {
+    case "critical":
+      return "error";
+    case "major":
+      return "warning";
+    default:
+      return "suggestion";
+  }
+}
+
+/** Map styleguide severity to DB severity */
+function mapStyleguideSeverity(severity: string): "error" | "warning" | "suggestion" {
+  switch (severity) {
+    case "error":
+      return "error";
+    case "warning":
+      return "warning";
+    default:
+      return "suggestion";
+  }
 }
 
 export async function handleGenerateReview(
@@ -57,38 +80,42 @@ export async function handleGenerateReview(
   const content = object ? await object.text() : "";
   if (!content.trim()) return error("Document is empty", 400);
 
-  // Parse and chunk the document
-  const sections = parseSections(content);
-  const chunks = chunkSections(sections);
+  // Phase 1: Run styleguide check (pure regex, no AI calls)
+  const styleguideReport = check(content, defaultStyleguide);
 
-  // Generate review for each chunk
-  const allItems: ReviewItemResult[] = [];
-  const summaries: string[] = [];
-
-  for (let i = 0; i < chunks.length; i++) {
-    const prompt = buildReviewPrompt(chunks[i].text, i, chunks.length);
-    const response = await callClaudeAPI(prompt, apiKey, {
+  // Phase 2: Run multi-persona review
+  const gatewayUrl = getGatewayUrl(env);
+  const callModel = (prompt: string) =>
+    callClaudeAPI(prompt, apiKey, {
       maxTokens: 4096,
-      gatewayUrl: getGatewayUrl(env),
+      gatewayUrl,
       gatewayToken: env.AI_GATEWAY_TOKEN,
     });
-    const result = parseReviewResponse(response);
-    allItems.push(...result.items);
-    summaries.push(result.summary);
-  }
 
-  const combinedSummary = summaries.join(" ");
+  const aggregatedReview = await reviewDocument(content, { callModel });
+
+  // Build combined summary
+  const personaSummaries = aggregatedReview.personaReviews.map((pr) => pr.summary).join(" ");
+  const combinedSummary = personaSummaries || "Review completed.";
 
   // Create review record
   const reviewId = crypto.randomUUID();
   const now = new Date().toISOString();
   const r2Key = `users/${userId}/projects/${projectId}/documents/${docId}/reviews/${reviewId}.json`;
 
-  // Store full review data in R2
+  // Store full review data in R2 (includes styleguide and persona details)
   const reviewData = {
     summary: combinedSummary,
-    items: allItems,
-    chunks: chunks.length,
+    styleguide: {
+      score: styleguideReport.score,
+      totalIssues: styleguideReport.totalIssues,
+      counts: styleguideReport.counts,
+      results: styleguideReport.results,
+      structuralResults: styleguideReport.structuralResults,
+    },
+    personaReviews: aggregatedReview.personaReviews,
+    clusters: aggregatedReview.clusters,
+    stats: aggregatedReview.stats,
     estimatedTokens: estimateTokens(content),
     generatedAt: now,
   };
@@ -101,24 +128,63 @@ export async function handleGenerateReview(
     .bind(reviewId, docId, doc.current_revision, r2Key, now)
     .run();
 
-  // Create review_items records in D1
+  // Create review_items from styleguide violations
   const itemRecords = [];
-  for (const item of allItems) {
+
+  for (const result of styleguideReport.results) {
     const itemId = crypto.randomUUID();
+    const severity = mapStyleguideSeverity(result.severity);
+    const location = `Line ${result.line}, Col ${result.column}`;
     await env.DB.prepare(
       "INSERT INTO review_items (id, review_id, category, description, severity, location, status) VALUES (?, ?, ?, ?, ?, ?, 'open')",
     )
-      .bind(itemId, reviewId, item.category, item.description, item.severity, item.location)
+      .bind(itemId, reviewId, result.category, result.description, severity, location)
       .run();
     itemRecords.push({
       id: itemId,
       review_id: reviewId,
-      category: item.category,
-      description: item.description,
-      severity: item.severity,
-      location: item.location,
-      suggestion: item.suggestion,
-      status: "open",
+      category: result.category,
+      description: result.description,
+      severity,
+      location,
+      suggestion: result.suggestion ?? null,
+      status: "open" as const,
+      source: "styleguide" as const,
+    });
+  }
+
+  // Create review_items from multi-persona consensus clusters
+  for (const cluster of aggregatedReview.clusters) {
+    const itemId = crypto.randomUUID();
+    const severity = mapSeverity(cluster.severity);
+    // Use location from the first item that has one
+    const location = cluster.items.find((i) => i.location)?.location ?? null;
+    const suggestion = cluster.items.find((i) => i.suggestion)?.suggestion ?? null;
+    await env.DB.prepare(
+      "INSERT INTO review_items (id, review_id, category, description, severity, location, status) VALUES (?, ?, ?, ?, ?, ?, 'open')",
+    )
+      .bind(
+        itemId,
+        reviewId,
+        cluster.category,
+        cluster.representativeDescription,
+        severity,
+        location,
+      )
+      .run();
+    itemRecords.push({
+      id: itemId,
+      review_id: reviewId,
+      category: cluster.category,
+      description: cluster.representativeDescription,
+      severity,
+      location,
+      suggestion,
+      status: "open" as const,
+      source: "persona" as const,
+      consensusStrength: cluster.strength,
+      consensusCount: cluster.consensusCount,
+      totalPersonas: cluster.totalPersonas,
     });
   }
 
@@ -132,6 +198,12 @@ export async function handleGenerateReview(
         created_at: now,
       },
       items: itemRecords,
+      styleguide: {
+        score: styleguideReport.score,
+        totalIssues: styleguideReport.totalIssues,
+        counts: styleguideReport.counts,
+      },
+      stats: aggregatedReview.stats,
     },
     201,
   );
@@ -483,4 +555,215 @@ export async function handleGenerateRefinement(
     },
     201,
   );
+}
+
+export async function handleScoreDocument(
+  env: Env,
+  request: Request,
+  projectId: string,
+  docId: string,
+  userId: string,
+): Promise<Response> {
+  if (!(await verifyProjectOwnership(env, projectId, userId))) {
+    return error("Project not found", 404);
+  }
+
+  const doc = await env.DB.prepare(
+    "SELECT id, project_id, title, current_revision, r2_key FROM documents WHERE id = ? AND project_id = ?",
+  )
+    .bind(docId, projectId)
+    .first<Document>();
+
+  if (!doc) return error("Document not found", 404);
+
+  const apiKey = getApiKey(env, request);
+  if (!apiKey)
+    return error("API key required. Set ANTHROPIC_API_KEY or pass x-anthropic-key header.", 400);
+
+  const docObject = await env.CONTENT_BUCKET.get(doc.r2_key);
+  const content = docObject ? await docObject.text() : "";
+  if (!content.trim()) return error("Document is empty", 400);
+
+  const gatewayUrl = getGatewayUrl(env);
+  const callModel = (prompt: string) =>
+    callClaudeAPI(prompt, apiKey, {
+      maxTokens: 4096,
+      gatewayUrl,
+      gatewayToken: env.AI_GATEWAY_TOKEN,
+    });
+
+  const score = await scoreDocument(content, docId, doc.current_revision, callModel);
+
+  // Persist to document_scores
+  await env.DB.prepare(
+    "INSERT INTO document_scores (id, document_id, revision_number, overall_score, model, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  )
+    .bind(
+      score.id,
+      score.documentId,
+      score.revisionNumber,
+      score.overallScore,
+      score.model,
+      score.createdAt,
+    )
+    .run();
+
+  // Persist dimension scores
+  for (const dim of score.dimensions) {
+    const dimScoreId = crypto.randomUUID();
+    await env.DB.prepare(
+      "INSERT INTO dimension_scores (id, document_score_id, dimension_id, score, justification) VALUES (?, ?, ?, ?, ?)",
+    )
+      .bind(dimScoreId, score.id, dim.dimensionId, dim.score, dim.justification)
+      .run();
+
+    // Persist weaknesses
+    for (const weakness of dim.weaknesses) {
+      const weaknessId = crypto.randomUUID();
+      await env.DB.prepare(
+        "INSERT INTO dimension_weaknesses (id, dimension_score_id, description, evidence) VALUES (?, ?, ?, ?)",
+      )
+        .bind(weaknessId, dimScoreId, weakness.description, weakness.evidence)
+        .run();
+    }
+  }
+
+  return json({ score }, 201);
+}
+
+export async function handleCompareDocuments(
+  env: Env,
+  request: Request,
+  projectId: string,
+  docId: string,
+  userId: string,
+): Promise<Response> {
+  if (!(await verifyProjectOwnership(env, projectId, userId))) {
+    return error("Project not found", 404);
+  }
+
+  const body = (await request.json()) as { revisionA: number; revisionB: number };
+  if (body.revisionA == null || body.revisionB == null) {
+    return error("revisionA and revisionB are required");
+  }
+
+  const apiKey = getApiKey(env, request);
+  if (!apiKey)
+    return error("API key required. Set ANTHROPIC_API_KEY or pass x-anthropic-key header.", 400);
+
+  // Fetch both revisions
+  const revA = await env.DB.prepare(
+    "SELECT r2_key FROM revisions WHERE document_id = ? AND revision_number = ?",
+  )
+    .bind(docId, body.revisionA)
+    .first<{ r2_key: string }>();
+
+  const revB = await env.DB.prepare(
+    "SELECT r2_key FROM revisions WHERE document_id = ? AND revision_number = ?",
+  )
+    .bind(docId, body.revisionB)
+    .first<{ r2_key: string }>();
+
+  // Fall back to document's current r2_key for the initial revision
+  const doc = await env.DB.prepare(
+    "SELECT id, r2_key, current_revision FROM documents WHERE id = ? AND project_id = ?",
+  )
+    .bind(docId, projectId)
+    .first<Document>();
+
+  if (!doc) return error("Document not found", 404);
+
+  const r2KeyA = revA?.r2_key ?? (body.revisionA === doc.current_revision ? doc.r2_key : null);
+  const r2KeyB = revB?.r2_key ?? (body.revisionB === doc.current_revision ? doc.r2_key : null);
+
+  if (!r2KeyA || !r2KeyB) return error("One or both revisions not found", 404);
+
+  const [objA, objB] = await Promise.all([
+    env.CONTENT_BUCKET.get(r2KeyA),
+    env.CONTENT_BUCKET.get(r2KeyB),
+  ]);
+  const contentA = objA ? await objA.text() : "";
+  const contentB = objB ? await objB.text() : "";
+
+  if (!contentA.trim() || !contentB.trim()) return error("One or both revisions are empty", 400);
+
+  const gatewayUrl = getGatewayUrl(env);
+  const callModel = (prompt: string) =>
+    callClaudeAPI(prompt, apiKey, {
+      maxTokens: 4096,
+      gatewayUrl,
+      gatewayToken: env.AI_GATEWAY_TOKEN,
+    });
+
+  const comparison = await compareDocuments(
+    { documentId: docId, revisionNumber: body.revisionA, content: contentA },
+    { documentId: docId, revisionNumber: body.revisionB, content: contentB },
+    callModel,
+  );
+
+  // Persist comparison
+  await env.DB.prepare(
+    "INSERT INTO comparisons (id, version_a_document_id, version_a_revision, version_b_document_id, version_b_revision, winner, reasoning, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  )
+    .bind(
+      crypto.randomUUID(),
+      docId,
+      body.revisionA,
+      docId,
+      body.revisionB,
+      comparison.winner,
+      comparison.reasoning,
+      comparison.model,
+      comparison.createdAt,
+    )
+    .run();
+
+  // Update Elo ratings
+  const elo = new EloRanking();
+
+  // Load existing ratings
+  const { results: existingRatings } = await env.DB.prepare(
+    "SELECT document_id, revision_number, rating, matches_played FROM elo_ratings WHERE document_id = ?",
+  )
+    .bind(docId)
+    .all<{
+      document_id: string;
+      revision_number: number;
+      rating: number;
+      matches_played: number;
+    }>();
+
+  if (existingRatings.length > 0) {
+    elo.importRatings(
+      existingRatings.map((r) => ({
+        documentId: r.document_id,
+        revisionNumber: r.revision_number,
+        rating: r.rating,
+        matchesPlayed: r.matches_played,
+      })),
+    );
+  }
+
+  const { ratingA, ratingB } = elo.recordResult(comparison);
+
+  // Upsert Elo ratings
+  for (const rating of [ratingA, ratingB]) {
+    await env.DB.prepare(
+      `INSERT INTO elo_ratings (document_id, revision_number, rating, matches_played, updated_at)
+       VALUES (?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(document_id, revision_number)
+       DO UPDATE SET rating = ?, matches_played = ?, updated_at = datetime('now')`,
+    )
+      .bind(
+        rating.documentId,
+        rating.revisionNumber,
+        rating.rating,
+        rating.matchesPlayed,
+        rating.rating,
+        rating.matchesPlayed,
+      )
+      .run();
+  }
+
+  return json({ comparison, ratings: { a: ratingA, b: ratingB } }, 201);
 }

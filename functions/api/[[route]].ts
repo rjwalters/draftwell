@@ -1,47 +1,49 @@
 // Cloudflare Pages Functions API handler
 // Thin router that dispatches to domain modules
 
-import type { Env } from "../lib/types";
-import { error } from "../lib/shared";
 import {
-  getAuthenticatedUser,
-  handleLogin,
-  handleLogout,
-  handleRegister,
-  handleGetMe,
-  handleUpdateMe,
-  handleDeleteMe,
-  handleRefreshSession,
-  handleHealthCheck,
-} from "../lib/auth";
-import { handleGetUsers, handleGetUser, handleCreateUser } from "../lib/users";
-import {
-  handleGetProjects,
-  handleGetProject,
-  handleCreateProject,
-  handleUpdateProject,
-  handleDeleteProject,
-} from "../lib/projects";
-import {
-  handleGetDocuments,
-  handleGetDocument,
-  handleCreateDocument,
-  handleUpdateDocument,
-  handleDeleteDocument,
-} from "../lib/documents";
-import {
-  handleGenerateReview,
-  handleGetReviews,
-  handleGetReview,
-  handleUpdateReviewItem,
-  handleGenerateRevision,
+  handleCompareDocuments,
   handleGenerateRefinement,
+  handleGenerateReview,
+  handleGenerateRevision,
+  handleGetReview,
+  handleGetReviews,
+  handleScoreDocument,
+  handleUpdateReviewItem,
 } from "../lib/ai";
 import {
-  handleGetVoiceProfiles,
-  handleGetVoiceProfile,
-  handleDeleteVoiceProfile,
+  getAuthenticatedUser,
+  handleDeleteMe,
+  handleGetMe,
+  handleHealthCheck,
+  handleLogin,
+  handleLogout,
+  handleRefreshSession,
+  handleRegister,
+  handleUpdateMe,
+} from "../lib/auth";
+import {
+  handleCreateDocument,
+  handleDeleteDocument,
+  handleGetDocument,
+  handleGetDocuments,
+  handleUpdateDocument,
+} from "../lib/documents";
+import {
+  handleCreateProject,
+  handleDeleteProject,
+  handleGetProject,
+  handleGetProjects,
+  handleUpdateProject,
+} from "../lib/projects";
+import { error } from "../lib/shared";
+import type { Env } from "../lib/types";
+import { handleCreateUser, handleGetUser, handleGetUsers } from "../lib/users";
+import {
   handleAnalyzeVoice,
+  handleDeleteVoiceProfile,
+  handleGetVoiceProfile,
+  handleGetVoiceProfiles,
 } from "../lib/voice";
 
 // Main request handler
@@ -232,6 +234,20 @@ export const onRequest: PagesFunction<Env> = async (context) => {
       const user = await getAuthenticatedUser(env, request);
       if (!user) return error("Unauthorized", 401);
       return handleGenerateRefinement(env, request, refineMatch[1], refineMatch[2], user.id);
+    }
+
+    const scoreMatch = path.match(/^\/api\/projects\/([^/]+)\/documents\/([^/]+)\/ai\/score$/);
+    if (scoreMatch && method === "POST") {
+      const user = await getAuthenticatedUser(env, request);
+      if (!user) return error("Unauthorized", 401);
+      return handleScoreDocument(env, request, scoreMatch[1], scoreMatch[2], user.id);
+    }
+
+    const compareMatch = path.match(/^\/api\/projects\/([^/]+)\/documents\/([^/]+)\/ai\/compare$/);
+    if (compareMatch && method === "POST") {
+      const user = await getAuthenticatedUser(env, request);
+      if (!user) return error("Unauthorized", 401);
+      return handleCompareDocuments(env, request, compareMatch[1], compareMatch[2], user.id);
     }
 
     // Voice profile endpoints (require authentication)
