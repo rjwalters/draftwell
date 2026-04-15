@@ -9,6 +9,25 @@ interface ReviewItem {
   severity: "error" | "warning" | "suggestion";
   location: string | null;
   status: "open" | "addressed" | "partial" | "dismissed";
+  source?: "styleguide" | "persona";
+  suggestion?: string | null;
+  consensusStrength?: number;
+  consensusCount?: number;
+  totalPersonas?: number;
+}
+
+interface StyleguideStats {
+  score: number;
+  totalIssues: number;
+  counts: Record<string, number>;
+}
+
+interface ReviewStats {
+  totalFindings: number;
+  totalClusters: number;
+  consensusCount: number;
+  disagreementCount: number;
+  personaCount: number;
 }
 
 interface Review {
@@ -62,6 +81,8 @@ export function ReviewPanel({
 }: ReviewPanelProps) {
   const [review, setReview] = useState<Review | null>(null);
   const [items, setItems] = useState<ReviewItem[]>([]);
+  const [styleguideStats, setStyleguideStats] = useState<StyleguideStats | null>(null);
+  const [reviewStats, setReviewStats] = useState<ReviewStats | null>(null);
   const [isReviewing, setIsReviewing] = useState(false);
   const [isRevising, setIsRevising] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
@@ -86,6 +107,8 @@ export function ReviewPanel({
       const data = await response.json();
       setReview(data.review);
       setItems(data.items);
+      setStyleguideStats(data.styleguide ?? null);
+      setReviewStats(data.stats ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate review");
     } finally {
@@ -259,6 +282,61 @@ export function ReviewPanel({
               <p className="text-sm text-muted-foreground">{review.summary}</p>
             </div>
 
+            {/* Styleguide Score */}
+            {styleguideStats && (
+              <div className="mb-4 rounded-md border p-3">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-xs font-medium text-muted-foreground">Styleguide Score</p>
+                  <span
+                    className={`text-sm font-semibold ${
+                      styleguideStats.score <= 2
+                        ? "text-green-600 dark:text-green-400"
+                        : styleguideStats.score <= 5
+                          ? "text-yellow-600 dark:text-yellow-400"
+                          : "text-red-600 dark:text-red-400"
+                    }`}
+                  >
+                    {(10 - styleguideStats.score).toFixed(1)}/10
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-gray-200 dark:bg-gray-700">
+                  <div
+                    className={`h-1.5 rounded-full ${
+                      styleguideStats.score <= 2
+                        ? "bg-green-500"
+                        : styleguideStats.score <= 5
+                          ? "bg-yellow-500"
+                          : "bg-red-500"
+                    }`}
+                    style={{ width: `${Math.max(0, (10 - styleguideStats.score) * 10)}%` }}
+                  />
+                </div>
+                {styleguideStats.totalIssues > 0 && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {styleguideStats.totalIssues} styleguide{" "}
+                    {styleguideStats.totalIssues === 1 ? "issue" : "issues"} found
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Persona Stats */}
+            {reviewStats && (
+              <div className="mb-4 flex flex-wrap gap-2 text-xs">
+                <span className="rounded-full bg-purple-100 px-2 py-0.5 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+                  {reviewStats.personaCount} personas
+                </span>
+                <span className="rounded-full bg-blue-100 px-2 py-0.5 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                  {reviewStats.consensusCount} consensus
+                </span>
+                {reviewStats.disagreementCount > 0 && (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                    {reviewStats.disagreementCount} split
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* Progress */}
             <div className="mb-4 flex items-center gap-3 text-xs">
               <span className="rounded-full bg-gray-100 px-2 py-0.5 dark:bg-gray-800">
@@ -307,9 +385,25 @@ export function ReviewPanel({
                     >
                       {item.severity}
                     </span>
+                    {item.source && (
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-xs ${
+                          item.source === "styleguide"
+                            ? "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300"
+                            : "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
+                        }`}
+                      >
+                        {item.source === "styleguide" ? "style" : "persona"}
+                      </span>
+                    )}
                     <span className="text-xs text-muted-foreground">{item.category}</span>
                     {item.location && (
                       <span className="text-xs text-muted-foreground">@ {item.location}</span>
+                    )}
+                    {item.consensusCount != null && item.totalPersonas != null && (
+                      <span className="text-xs text-muted-foreground">
+                        {item.consensusCount}/{item.totalPersonas}
+                      </span>
                     )}
                     <span
                       className={`ml-auto rounded px-1.5 py-0.5 text-xs ${STATUS_COLORS[item.status]}`}
@@ -318,6 +412,9 @@ export function ReviewPanel({
                     </span>
                   </div>
                   <p className="text-sm">{item.description}</p>
+                  {item.suggestion && (
+                    <p className="mt-1 text-xs text-muted-foreground italic">{item.suggestion}</p>
+                  )}
                   {item.status !== "dismissed" && item.status !== "addressed" && (
                     <div className="mt-2 flex gap-1">
                       <button

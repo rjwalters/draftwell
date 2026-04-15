@@ -2,11 +2,13 @@
 // Thin router that dispatches to domain modules
 
 import {
+  handleCompareDocuments,
   handleGenerateRefinement,
   handleGenerateReview,
   handleGenerateRevision,
   handleGetReview,
   handleGetReviews,
+  handleScoreDocument,
   handleUpdateReviewItem,
 } from "../lib/ai";
 import {
@@ -217,6 +219,20 @@ export const onRequest: PagesFunction<Env> = async (context) => {
       const user = await getAuthenticatedUser(env, request);
       if (!user) return error("Unauthorized", 401);
       return handleGenerateRefinement(env, request, refineMatch[1], refineMatch[2], user.id);
+    }
+
+    const scoreMatch = path.match(/^\/api\/projects\/([^/]+)\/documents\/([^/]+)\/ai\/score$/);
+    if (scoreMatch && method === "POST") {
+      const user = await getAuthenticatedUser(env, request);
+      if (!user) return error("Unauthorized", 401);
+      return handleScoreDocument(env, request, scoreMatch[1], scoreMatch[2], user.id);
+    }
+
+    const compareMatch = path.match(/^\/api\/projects\/([^/]+)\/documents\/([^/]+)\/ai\/compare$/);
+    if (compareMatch && method === "POST") {
+      const user = await getAuthenticatedUser(env, request);
+      if (!user) return error("Unauthorized", 401);
+      return handleCompareDocuments(env, request, compareMatch[1], compareMatch[2], user.id);
     }
 
     // Voice profile endpoints (require authentication)
