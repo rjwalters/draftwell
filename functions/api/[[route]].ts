@@ -38,7 +38,6 @@ import {
 } from "../lib/projects";
 import { error } from "../lib/shared";
 import type { Env } from "../lib/types";
-import { handleCreateUser, handleGetUser, handleGetUsers } from "../lib/users";
 import {
   handleAnalyzeVoice,
   handleDeleteVoiceProfile,
@@ -88,20 +87,6 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 
     if (path === "/api/auth/refresh" && method === "POST") {
       return handleRefreshSession(env, request);
-    }
-
-    // Users endpoints
-    if (path === "/api/users" && method === "GET") {
-      return handleGetUsers(env);
-    }
-
-    if (path === "/api/users" && method === "POST") {
-      return handleCreateUser(env, request);
-    }
-
-    const userMatch = path.match(/^\/api\/users\/([^/]+)$/);
-    if (userMatch && method === "GET") {
-      return handleGetUser(env, userMatch[1]);
     }
 
     // Projects endpoints (require authentication via session cookie)
