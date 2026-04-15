@@ -1,0 +1,1 @@
+The duplication described in the issue no longer exists. functions/lib/users.ts has been removed from the codebase (likely during PR #63). hashPassword now exists only in functions/lib/auth.ts (lines 12-41). No other copies exist anywhere in the codebase. Issue is already resolved.
