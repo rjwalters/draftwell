@@ -9,6 +9,9 @@ Chronological record of merged PRs and closed issues.
 - **PR #62**: fix: exclude review-panel from vitest test discovery (Closes #50)
 - **PR #61**: feat: wire styleguide and review-panel packages into live API (Closes #51)
 - **PR #60**: fix: remove unauthenticated user API endpoints (Closes #52)
+- **PR #59**: docs: Guide document maintenance update
+- **Issue #65** (closed): Remove 21 stale git worktrees from closed issues (~1GB)
+- **Issue #57** (closed): Deduplicate hashPassword function across auth.ts and users.ts
 
 ### 2026-04-14
 
