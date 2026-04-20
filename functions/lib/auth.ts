@@ -1,12 +1,12 @@
-import type { Env, User } from "./types";
 import {
-  json,
-  error,
-  setSessionCookie,
   clearSessionCookie,
+  error,
   getSessionIdFromCookie,
+  json,
   SESSION_DURATION_MS,
+  setSessionCookie,
 } from "./shared";
+import type { Env, User } from "./types";
 
 // Password hashing using PBKDF2 (edge-compatible, more secure than plain SHA-256)
 async function hashPassword(
@@ -207,7 +207,7 @@ export async function handleUpdateMe(env: Env, request: Request): Promise<Respon
   const body = (await request.json()) as { name?: string };
   const { name } = body;
 
-  if (!name || !name.trim()) {
+  if (!name?.trim()) {
     return error("Name is required");
   }
 
@@ -225,9 +225,7 @@ export async function handleDeleteMe(env: Env, request: Request): Promise<Respon
   // Delete user — cascades to sessions, projects, documents, reviews, revisions
   // via ON DELETE CASCADE foreign keys.
   // Also clean up R2 objects for the user's documents and reviews.
-  const { results: projects } = await env.DB.prepare(
-    "SELECT id FROM projects WHERE user_id = ?",
-  )
+  const { results: projects } = await env.DB.prepare("SELECT id FROM projects WHERE user_id = ?")
     .bind(user.id)
     .all<{ id: string }>();
 

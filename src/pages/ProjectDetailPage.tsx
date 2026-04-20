@@ -286,9 +286,7 @@ export function ProjectDetailPage() {
                       {doc.updated_at !== doc.created_at && (
                         <> • Updated {new Date(doc.updated_at).toLocaleDateString()}</>
                       )}
-                      {doc.current_revision > 0 && (
-                        <> • Rev {doc.current_revision}</>
-                      )}
+                      {doc.current_revision > 0 && <> • Rev {doc.current_revision}</>}
                     </div>
                   </Link>
                   <ConfirmDialog

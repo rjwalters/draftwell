@@ -1,8 +1,12 @@
-import type { Env, Document } from "./types";
-import { json, error } from "./shared";
 import { verifyProjectOwnership } from "./projects";
+import { error, json } from "./shared";
+import type { Document, Env } from "./types";
 
-export async function handleGetDocuments(env: Env, projectId: string, userId: string): Promise<Response> {
+export async function handleGetDocuments(
+  env: Env,
+  projectId: string,
+  userId: string,
+): Promise<Response> {
   if (!(await verifyProjectOwnership(env, projectId, userId))) {
     return error("Project not found", 404);
   }
