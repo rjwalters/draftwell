@@ -112,6 +112,43 @@ describe("LoginPage", () => {
     expect(screen.getByLabelText(/name/i)).toBeRequired();
   });
 
+  it("shows the Google sign-in button in login mode", () => {
+    renderWithProviders(<LoginPage />);
+
+    const googleButton = screen.getByRole("link", { name: /sign in with google/i });
+    expect(googleButton).toBeInTheDocument();
+    expect(googleButton).toHaveAttribute("href", "/api/auth/google");
+  });
+
+  it("shows the Google sign-in button in registration mode", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<LoginPage />);
+
+    await user.click(screen.getByRole("button", { name: /don't have an account/i }));
+
+    const googleButton = screen.getByRole("link", { name: /sign in with google/i });
+    expect(googleButton).toBeInTheDocument();
+    expect(googleButton).toHaveAttribute("href", "/api/auth/google");
+  });
+
+  it("renders an error message when ?error=oauth is present", () => {
+    window.history.pushState({}, "", "/login?error=oauth");
+    renderWithProviders(<LoginPage />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/google sign-in failed/i);
+
+    // Reset the URL so it doesn't leak into other tests.
+    window.history.pushState({}, "", "/");
+  });
+
+  it("does not render the oauth error message without the query param", () => {
+    window.history.pushState({}, "", "/login");
+    renderWithProviders(<LoginPage />);
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    window.history.pushState({}, "", "/");
+  });
+
   it("submits registration form with valid data", async () => {
     const user = userEvent.setup();
     renderWithProviders(<LoginPage />);
