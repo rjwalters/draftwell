@@ -28,6 +28,14 @@ binding = "AI"
 # Create at: dash.cloudflare.com → AI → AI Gateway → "draftwell"
 
 # Environment variables (add secrets via `wrangler secret put`)
+#
+# Google OAuth (required for "Sign in with Google"; the endpoints degrade
+# gracefully with a 503 when unset):
+#   wrangler secret put GOOGLE_CLIENT_ID
+#   wrangler secret put GOOGLE_CLIENT_SECRET
+# Create a Google Cloud OAuth 2.0 "Web application" client and register the
+# authorized redirect URI: https://draftwell.org/api/auth/google/callback
+# (add http://localhost:8788/api/auth/google/callback for local dev).
 [vars]
 APP_NAME = "Draftwell"
 AI_GATEWAY = "251e6e8626d921603fdc3f0d75576bc6/draftwell"

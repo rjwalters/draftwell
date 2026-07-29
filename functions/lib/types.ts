@@ -7,6 +7,11 @@ export interface Env {
   ANTHROPIC_API_KEY: string;
   AI_GATEWAY: string;
   AI_GATEWAY_TOKEN: string;
+  // Google OAuth (optional — set via `wrangler secret put`). When unset, the
+  // Google sign-in endpoints degrade gracefully instead of redirecting with an
+  // empty client id.
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
 }
 
 export interface VoiceProfile {

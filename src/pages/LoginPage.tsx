@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -23,6 +23,8 @@ export function LoginPage() {
   const { login, register } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const oauthError = searchParams.get("error") === "oauth";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,6 +63,14 @@ export function LoginPage() {
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
+            {oauthError && (
+              <div
+                role="alert"
+                className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
+                Google sign-in failed. Please try again or use email and password.
+              </div>
+            )}
             {!isLogin && (
               <div className="space-y-2">
                 <label htmlFor="name" className="text-sm font-medium">
@@ -106,6 +116,15 @@ export function LoginPage() {
           <CardFooter className="flex flex-col space-y-4">
             <Button type="submit" className="w-full" disabled={isSubmitting}>
               {isSubmitting ? "Loading..." : isLogin ? "Sign In" : "Create Account"}
+            </Button>
+            <div className="flex w-full items-center gap-3">
+              <span className="h-px flex-1 bg-border" />
+              <span className="text-xs text-muted-foreground">or</span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+            {/* Redirect-based OAuth flow: full-page navigation, not a fetch. */}
+            <Button asChild variant="outline" className="w-full">
+              <a href="/api/auth/google">Sign in with Google</a>
             </Button>
             <Button
               type="button"
