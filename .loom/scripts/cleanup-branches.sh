@@ -17,6 +17,16 @@
 
 set -e  # Exit on error
 
+# Forge-agnostic issue/PR operations via the native `loom-daemon forge`
+# subcommand (port of the retired `loom-forge`). GitHub: passthrough to `gh`.
+# Gitea: declines (exit 3), degrading to the `gh` fallback. Fall back to `gh`
+# when loom-daemon is absent so a bare workspace still works.
+if command -v loom-daemon &>/dev/null; then
+    FORGE="loom-daemon forge"
+else
+    FORGE="gh"
+fi
+
 # Colors
 # shellcheck disable=SC2034  # Color palette - not all colors used in every script
 RED='\033[0;31m'
@@ -63,7 +73,7 @@ for branch in $branches; do
     ((checked++))
 
     # Check issue status
-    status=$(gh issue view "$issue_num" --json state --jq .state 2>/dev/null || echo "NOT_FOUND")
+    status=$($FORGE issue view "$issue_num" --json state --jq .state 2>/dev/null || echo "NOT_FOUND")
 
     if [[ "$status" == "CLOSED" ]]; then
         echo -e "${GREEN}✓${NC} Issue #$issue_num is CLOSED - deleting $branch"

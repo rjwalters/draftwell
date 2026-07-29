@@ -93,27 +93,27 @@ ${YELLOW}QUICK START:${NC}
     ./.loom/bin/loom attach shepherd-1
 
     ${GRAY}# Send a command to an agent${NC}
-    ./.loom/bin/loom send shepherd-1 "/shepherd 123"
+    ./.loom/bin/loom send builder-1 "/loom:sweep 123"
 
     ${GRAY}# View logs${NC}
-    ./.loom/bin/loom logs shepherd-1
+    ./.loom/bin/loom logs builder-1
 
     ${GRAY}# Stop everything${NC}
     ./.loom/bin/loom stop
 
 ${YELLOW}EXAMPLES:${NC}
     ./.loom/bin/loom start                  Start all configured agents
-    ./.loom/bin/loom start --only shepherd  Start only shepherd agents
+    ./.loom/bin/loom start --only builder   Start only builder agents
     ./.loom/bin/loom status                 Show current state
     ./.loom/bin/loom status --json          Machine-readable status
     ./.loom/bin/loom health                 Run diagnostic health check
     ./.loom/bin/loom health --json          Machine-readable health report
-    ./.loom/bin/loom attach shepherd-1      Connect to agent terminal
-    ./.loom/bin/loom send shepherd-1 "/shepherd 123"  Send command to agent
+    ./.loom/bin/loom attach builder-1       Connect to agent terminal
+    ./.loom/bin/loom send builder-1 "/loom:sweep 123"  Send command to agent
     ./.loom/bin/loom stop                   Graceful shutdown
     ./.loom/bin/loom stop --force           Force kill all sessions
-    ./.loom/bin/loom stop shepherd-1        Stop single agent
-    ./.loom/bin/loom scale shepherd 3       Scale shepherd pool to 3
+    ./.loom/bin/loom stop builder-1         Stop single agent
+    ./.loom/bin/loom scale builder 3        Scale builder pool to 3
     ./.loom/bin/loom logs terminal-1        Tail agent output
     ./.loom/bin/loom logs --all             Tail all agent logs
 
@@ -138,20 +138,20 @@ ${YELLOW}CONFIGURATION:${NC}
 
 ${YELLOW}TMUX SOCKET:${NC}
     Loom uses a dedicated tmux socket named "loom" for isolation.
-    Sessions are named "loom-<agent-id>" (e.g., loom-shepherd-1).
+    Sessions are named "loom-<agent-id>" (e.g., loom-builder-1).
 
     To manually interact with Loom tmux sessions:
     ${GRAY}tmux -L loom list-sessions${NC}
-    ${GRAY}tmux -L loom attach -t loom-shepherd-1${NC}
+    ${GRAY}tmux -L loom attach -t loom-builder-1${NC}
 
 ${YELLOW}FOR MORE HELP:${NC}
     ./.loom/bin/loom <command> --help    Command-specific help
     ./.loom/bin/loom help <command>      Same as above
 
 ${YELLOW}RELATED COMMANDS:${NC}
-    /loom                     Run the daemon (Layer 2 orchestration)
-    /shepherd <issue>         Orchestrate a single issue lifecycle
+    /loom:sweep <issue>       Orchestrate a single issue lifecycle (Curator → Merge)
     /builder, /judge, etc.    Assume specialized agent roles
+    mcp__loom__dispatch_sweep Multi-issue dispatch via loom-daemon (Tier 2)
 
 ${GRAY}Loom CLI v0.1.0${NC}
 EOF
@@ -171,21 +171,28 @@ show_command_help() {
             fi
             ;;
         status)
-            if [[ -n "$REPO_ROOT" && -f "$REPO_ROOT/.loom/scripts/loom-status.sh" ]]; then
-                exec "$REPO_ROOT/.loom/scripts/loom-status.sh" --help
+            if [[ -n "$CLI_DIR" && -f "$CLI_DIR/loom-status.sh" ]]; then
+                exec "$CLI_DIR/loom-status.sh" --help
             else
                 echo -e "${RED}Error: status command not installed${NC}"
                 exit 1
             fi
             ;;
         health)
-            local loom_venv="$REPO_ROOT/loom-tools/.venv/bin/loom-daemon-diagnostic"
-            if [[ -n "$REPO_ROOT" && -x "$loom_venv" ]]; then
-                exec "$loom_venv" --help
-            elif command -v loom-daemon-diagnostic &>/dev/null; then
-                exec loom-daemon-diagnostic --help
+            # `loom health` now delegates to native `loom-daemon status` (#4274);
+            # surface that command's help.
+            local loom_daemon_bin=""
+            if command -v loom-daemon &>/dev/null; then
+                loom_daemon_bin="$(command -v loom-daemon)"
+            elif [[ -n "$REPO_ROOT" && -x "$REPO_ROOT/loom-daemon/target/release/loom-daemon" ]]; then
+                loom_daemon_bin="$REPO_ROOT/loom-daemon/target/release/loom-daemon"
+            elif [[ -n "$REPO_ROOT" && -x "$REPO_ROOT/loom-daemon/target/debug/loom-daemon" ]]; then
+                loom_daemon_bin="$REPO_ROOT/loom-daemon/target/debug/loom-daemon"
+            fi
+            if [[ -n "$loom_daemon_bin" ]]; then
+                exec "$loom_daemon_bin" status --help
             else
-                echo -e "${RED}Error: health command not installed (install loom-tools)${NC}"
+                echo -e "${RED}Error: health command requires the loom-daemon binary${NC}"
                 exit 1
             fi
             ;;

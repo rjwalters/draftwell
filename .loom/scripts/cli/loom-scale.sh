@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
-# loom scale - Dynamic agent scaling
+# loom scale - Dynamic agent scaling (LEGACY: tmux Manual-Orchestration-Mode)
+#
+# DEPRECATED (#3811): this script scales tmux-session-based agents for the
+# hands-on Manual Orchestration Mode. It is NOT the autonomous daemon's scaling
+# mechanism. The Rust `loom-daemon` work finder now scales concurrent autonomous
+# sweeps automatically, work-driven: min(token-pool size, disk headroom,
+# LOOM_WORK_FINDER_MAX_CONCURRENT), recomputed every tick. To tune autonomous
+# concurrency, set those env vars instead of using this script:
+#   LOOM_WORK_FINDER=1                     Enable the daemon work-finder loop.
+#   LOOM_WORK_FINDER_MAX_CONCURRENT=<N>    Operator ceiling on concurrent sweeps.
+# See .loom/docs/daemon-reference.md -> "Autonomous work finder".
+#
+# The `shepherd` role no longer exists (removed in v0.10.0); use `builder` or
+# another live role name if you drive tmux agents manually.
 #
 # Usage:
 #   loom scale <role> <count>     Scale role to target count
@@ -7,9 +20,9 @@
 #   loom scale --help             Show help
 #
 # Examples:
-#   loom scale shepherd 3         Scale shepherd agents to 3
-#   loom scale shepherd 0         Stop all shepherds
 #   loom scale builder 2          Scale builder agents to 2
+#   loom scale builder 0          Stop all builder agents
+#   loom scale judge 1            Scale judge agents to 1
 
 set -euo pipefail
 
@@ -70,7 +83,17 @@ fi
 # Show help
 show_help() {
     cat <<EOF
-${BOLD}loom scale - Dynamic agent scaling${NC}
+${BOLD}loom scale - Dynamic agent scaling (LEGACY: tmux Manual Orchestration Mode)${NC}
+
+${YELLOW}DEPRECATED (#3811):${NC}
+    This scales tmux-session agents for hands-on Manual Orchestration Mode. It is
+    NOT the autonomous daemon's scaling mechanism. The Rust loom-daemon work
+    finder scales concurrent autonomous sweeps automatically, work-driven:
+    min(token-pool size, disk headroom, LOOM_WORK_FINDER_MAX_CONCURRENT),
+    recomputed every tick. To tune AUTONOMOUS concurrency, set:
+        LOOM_WORK_FINDER=1                    Enable the daemon work-finder loop.
+        LOOM_WORK_FINDER_MAX_CONCURRENT=<N>   Operator ceiling on concurrent sweeps.
+    See .loom/docs/daemon-reference.md -> "Autonomous work finder".
 
 ${YELLOW}USAGE:${NC}
     loom scale <role> <count>     Scale role to target count
@@ -84,13 +107,14 @@ ${YELLOW}OPTIONS:${NC}
     --status          Show current scale for each role
 
 ${YELLOW}EXAMPLES:${NC}
-    loom scale shepherd 3         Scale shepherd agents to 3
-    loom scale shepherd 0         Stop all shepherds
     loom scale builder 2          Scale builder agents to 2
+    loom scale builder 0          Stop all builder agents
+    loom scale judge 1            Scale judge agents to 1
     loom scale --status           Show current agent counts
 
 ${YELLOW}ROLES:${NC}
-    Common roles: shepherd, builder, judge, curator, champion, architect
+    Common roles: builder, judge, curator, champion, architect
+    (the 'shepherd' role was removed in v0.10.0)
 
 ${YELLOW}HOW IT WORKS:${NC}
     Scale up:
@@ -143,7 +167,7 @@ get_max_role_number() {
 
     while read -r session; do
         if [[ -n "$session" ]]; then
-            # Extract number from session name (e.g., loom-shepherd-3 -> 3)
+            # Extract number from session name (e.g., loom-builder-3 -> 3)
             local num
             num=$(echo "$session" | grep -oE '[0-9]+$' || echo "0")
             if [[ "$num" -gt "$max" ]]; then
@@ -169,23 +193,20 @@ show_status() {
         return 0
     fi
 
-    # Count by role pattern
-    declare -A role_counts
+    # Count by role pattern (bash 3.2-compatible: no associative arrays)
+    # Extract role names, sort and count with uniq -c, then display
+    local role_summary
+    role_summary=$(echo "$sessions" \
+        | sed 's/^loom-//' \
+        | sed 's/-[0-9]*$//' \
+        | sort \
+        | uniq -c)
 
-    while read -r session; do
-        if [[ -n "$session" ]]; then
-            # Extract role name (e.g., loom-shepherd-1 -> shepherd)
-            local role
-            role=$(echo "$session" | sed 's/^loom-//' | sed 's/-[0-9]*$//')
-            role_counts["$role"]=$((${role_counts["$role"]:-0} + 1))
+    while read -r count role; do
+        if [[ -n "$role" ]]; then
+            echo -e "  ${CYAN}$role:${NC} $count"
         fi
-    done <<< "$sessions"
-
-    # Display counts
-    for role in "${!role_counts[@]}"; do
-        local count="${role_counts[$role]}"
-        echo -e "  ${CYAN}$role:${NC} $count"
-    done
+    done <<< "$role_summary"
 
     echo ""
     echo -e "${GRAY}Total: $(echo "$sessions" | wc -l | tr -d ' ') session(s)${NC}"
@@ -223,15 +244,26 @@ spawn_role_agent() {
     # Change to workspace
     tmux -L "$TMUX_SOCKET" send-keys -t "$session_name" "cd '$REPO_ROOT'" C-m
 
-    # Start claude with role
+    # Start claude with role.  Prefer the resilient wrapper (claude-wrapper.sh)
+    # so OAuth-token rotation, retry, and auth pre-flight all run consistently
+    # with the Python spawn path in agent_spawn.py.  The wrapper exec's the
+    # real `claude` binary; CLAUDE_CODE_OAUTH_TOKEN inherited from the parent
+    # shell flows through naturally.  See issue #3236.
     local role_file="${role}.md"
     local role_path="$REPO_ROOT/.loom/roles/$role_file"
+    local wrapper_path="$REPO_ROOT/.loom/scripts/claude-wrapper.sh"
+    local claude_invocation
+    if [[ -x "$wrapper_path" ]]; then
+        claude_invocation="'$wrapper_path'"
+    else
+        claude_invocation="claude"
+    fi
 
     if [[ -f "$role_path" ]]; then
-        tmux -L "$TMUX_SOCKET" send-keys -t "$session_name" "claude -p '/$role' --dangerously-skip-permissions" C-m
+        tmux -L "$TMUX_SOCKET" send-keys -t "$session_name" "$claude_invocation -p '/$role' --dangerously-skip-permissions" C-m
     else
         echo -e "    ${YELLOW}Warning: Role file not found: $role_file${NC}"
-        tmux -L "$TMUX_SOCKET" send-keys -t "$session_name" "claude --dangerously-skip-permissions" C-m
+        tmux -L "$TMUX_SOCKET" send-keys -t "$session_name" "$claude_invocation --dangerously-skip-permissions" C-m
     fi
 
     return 0

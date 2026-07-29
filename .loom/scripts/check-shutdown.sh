@@ -14,6 +14,16 @@
 
 set -e
 
+# Forge-agnostic issue/PR operations via the native `loom-daemon forge`
+# subcommand (port of the retired `loom-forge`). GitHub: passthrough to `gh`.
+# Gitea: declines (exit 3), degrading to the `gh` fallback. Fall back to `gh`
+# when loom-daemon is absent so a bare workspace still works.
+if command -v loom-daemon &>/dev/null; then
+    FORGE="loom-daemon forge"
+else
+    FORGE="gh"
+fi
+
 # Navigate to repository root (handle being called from worktree)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$SCRIPT_DIR/../..")"
@@ -37,7 +47,7 @@ fi
 
 # Check for issue-specific abort (if issue number provided)
 if [ -n "$ISSUE_NUMBER" ]; then
-    LABELS=$(gh issue view "$ISSUE_NUMBER" --json labels --jq '.labels[].name' 2>/dev/null || echo "")
+    LABELS=$($FORGE issue view "$ISSUE_NUMBER" --json labels --jq '.labels[].name' 2>/dev/null || echo "")
     if echo "$LABELS" | grep -q "loom:abort"; then
         echo "SHUTDOWN:abort:$ISSUE_NUMBER"
         exit 0
