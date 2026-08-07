@@ -24,8 +24,14 @@ id = "08f8937b58104f319651b204d60ea887"
 binding = "AI"
 
 # AI Gateway (route all model calls through gateway for logging/caching/analytics)
-# Gateway URL: https://gateway.ai.cloudflare.com/v1/251e6e8626d921603fdc3f0d75576bc6/draftwell
+# Gateway URL: https://gateway.ai.cloudflare.com/v1/<account-id>/draftwell
 # Create at: dash.cloudflare.com → AI → AI Gateway → "draftwell"
+#
+# AI_GATEWAY is set as a SECRET, not a [vars] entry, because its value embeds
+# the Cloudflare account ID and this is a public repo:
+#   wrangler secret put AI_GATEWAY     # value: <account-id>/draftwell
+# functions/lib/ai.ts guards on `if (env.AI_GATEWAY)`, so if it is unset the
+# app falls back to direct model calls rather than breaking.
 
 # Environment variables (add secrets via `wrangler secret put`)
 #
@@ -38,4 +44,3 @@ binding = "AI"
 # (add http://localhost:8788/api/auth/google/callback for local dev).
 [vars]
 APP_NAME = "Draftwell"
-AI_GATEWAY = "251e6e8626d921603fdc3f0d75576bc6/draftwell"
