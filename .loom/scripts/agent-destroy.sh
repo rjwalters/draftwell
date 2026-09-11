@@ -21,6 +21,10 @@ SESSION_PREFIX="loom-"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=kill-session-tree.sh
 source "$SCRIPT_DIR/kill-session-tree.sh"
+# Shared worktree-root resolver (#3530). Terminal-destroy cleanup must
+# recognize worktrees at an overridden root, not just under .loom/worktrees.
+# shellcheck source=lib/worktree-root.sh
+source "$SCRIPT_DIR/lib/worktree-root.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -117,34 +121,55 @@ main() {
         log_info "Session not found: $session_name (already destroyed)"
     fi
 
-    # Clean worktree if requested
+    # Clean worktree if requested. Cleanup honors the Loom worktree ownership
+    # model (see issue #3334): only worktrees marked with a .loom-managed
+    # sentinel file are removed, and the LOOM_PRESERVE_WORKTREE env var
+    # disables cleanup unconditionally.
     local worktree_cleaned=false
     if [[ "$clean_worktree" == "true" ]] && [[ -n "$worktree_path" ]] && [[ -d "$worktree_path" ]]; then
-        local repo_root
-        if repo_root=$(find_repo_root); then
-            # Only clean if it's actually a worktree (not the main repo)
-            if [[ "$worktree_path" != "$repo_root" ]] && [[ "$worktree_path" == *".loom/worktrees/"* ]]; then
-                # Safety check: Don't remove worktree if current shell's CWD is inside it
-                local current_cwd
-                local worktree_real
-                current_cwd=$(pwd -P 2>/dev/null || pwd)
-                worktree_real=$(cd "$worktree_path" 2>/dev/null && pwd -P || echo "$worktree_path")
-                if [[ "$current_cwd" == "$worktree_real" || "$current_cwd" == "$worktree_real/"* ]]; then
-                    log_warn "Cannot remove worktree: current shell CWD is inside it"
-                    log_info "CWD: $current_cwd"
-                    log_info "Worktree: $worktree_real"
-                else
-                    # Safety check: Don't remove worktree if other processes have their CWD inside it
-                    local active_pids
-                    active_pids=$(lsof +d "$worktree_real" -F pt 2>/dev/null | awk '/^p/{pid=substr($0,2)} /^tcwd/{print pid}' | grep -v "$$" || true)
-                    if [[ -n "$active_pids" ]]; then
-                        log_warn "Skipping worktree removal: active processes detected (PIDs: $(echo "$active_pids" | tr '\n' ' '))"
-                        log_info "Use 'loom-clean' for deferred cleanup after processes exit"
+        if [[ "${LOOM_PRESERVE_WORKTREE:-0}" == "1" ]]; then
+            log_info "Worktree cleanup skipped (LOOM_PRESERVE_WORKTREE=1): $worktree_path"
+        else
+            local repo_root
+            if repo_root=$(find_repo_root); then
+                # Resolve the configured worktree root (#3530) so an overridden
+                # base (e.g. an external volume) is recognized as a Loom
+                # worktree here; without an override this is
+                # "$repo_root/.loom/worktrees". We accept a match against either
+                # the resolved root OR the historical .loom/worktrees substring
+                # so mixed setups (an override configured after worktrees were
+                # created under the default) still GC correctly.
+                local wt_root_dir
+                wt_root_dir="$(loom_worktree_root "$repo_root")"
+                # Only clean if it's actually a worktree (not the main repo)
+                if [[ "$worktree_path" != "$repo_root" ]] && \
+                   { [[ "$worktree_path" == "$wt_root_dir/"* ]] || [[ "$worktree_path" == *".loom/worktrees/"* ]]; }; then
+                    if [[ ! -f "$worktree_path/.loom-managed" ]]; then
+                        log_warn "Worktree at $worktree_path lacks .loom-managed sentinel — refusing to remove (user-owned)"
                     else
-                        log_info "Removing worktree: $worktree_path"
-                        git -C "$repo_root" worktree remove "$worktree_path" --force 2>/dev/null || true
-                        worktree_cleaned=true
-                        log_success "Removed worktree: $worktree_path"
+                        # Safety check: Don't remove worktree if current shell's CWD is inside it
+                        local current_cwd
+                        local worktree_real
+                        current_cwd=$(pwd -P 2>/dev/null || pwd)
+                        worktree_real=$(cd "$worktree_path" 2>/dev/null && pwd -P || echo "$worktree_path")
+                        if [[ "$current_cwd" == "$worktree_real" || "$current_cwd" == "$worktree_real/"* ]]; then
+                            log_warn "Cannot remove worktree: current shell CWD is inside it"
+                            log_info "CWD: $current_cwd"
+                            log_info "Worktree: $worktree_real"
+                        else
+                            # Safety check: Don't remove worktree if other processes have their CWD inside it
+                            local active_pids
+                            active_pids=$(lsof +d "$worktree_real" -F pt 2>/dev/null | awk '/^p/{pid=substr($0,2)} /^tcwd/{print pid}' | grep -v "$$" || true)
+                            if [[ -n "$active_pids" ]]; then
+                                log_warn "Skipping worktree removal: active processes detected (PIDs: $(echo "$active_pids" | tr '\n' ' '))"
+                                log_info "Use 'loom-clean' for deferred cleanup after processes exit"
+                            else
+                                log_info "Removing worktree: $worktree_path"
+                                git -C "$repo_root" worktree remove "$worktree_path" --force 2>/dev/null || true
+                                worktree_cleaned=true
+                                log_success "Removed worktree: $worktree_path"
+                            fi
+                        fi
                     fi
                 fi
             fi

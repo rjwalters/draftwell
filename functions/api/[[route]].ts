@@ -29,6 +29,7 @@ import {
   handleGetDocuments,
   handleUpdateDocument,
 } from "../lib/documents";
+import { handleGoogleAuth, handleGoogleCallback } from "../lib/google-auth";
 import {
   handleCreateProject,
   handleDeleteProject,
@@ -87,6 +88,15 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 
     if (path === "/api/auth/refresh" && method === "POST") {
       return handleRefreshSession(env, request);
+    }
+
+    // Google OAuth (redirect-based flow)
+    if (path === "/api/auth/google" && method === "GET") {
+      return handleGoogleAuth(env, request);
+    }
+
+    if (path === "/api/auth/google/callback" && method === "GET") {
+      return handleGoogleCallback(env, request);
     }
 
     // Projects endpoints (require authentication via session cookie)

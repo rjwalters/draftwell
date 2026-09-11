@@ -57,7 +57,7 @@ async function verifyPassword(password: string, storedHash: string): Promise<boo
 }
 
 // Session management
-async function createSession(env: Env, userId: string): Promise<string> {
+export async function createSession(env: Env, userId: string): Promise<string> {
   const sessionId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + SESSION_DURATION_MS).toISOString();
 
@@ -117,9 +117,15 @@ export async function handleLogin(env: Env, request: Request): Promise<Response>
     "SELECT id, email, name, password_hash, created_at FROM users WHERE email = ?",
   )
     .bind(email)
-    .first<User & { password_hash: string }>();
+    .first<User & { password_hash: string | null }>();
 
   if (!user) {
+    return error("Invalid email or password", 401);
+  }
+
+  // Google-only accounts have a null password_hash — password login must fail
+  // cleanly (401) rather than crashing verifyPassword (500).
+  if (!user.password_hash) {
     return error("Invalid email or password", 401);
   }
 
