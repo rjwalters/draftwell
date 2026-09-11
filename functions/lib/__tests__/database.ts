@@ -71,7 +71,7 @@ export function database() {
     ANTHROPIC_API_KEY: "test-only",
   } as unknown as Env;
   sqlite.exec(`
-    INSERT INTO users (id, email, name) VALUES ('owner', 'owner@example.test', 'Owner'), ('other', 'other@example.test', 'Other');
+    INSERT INTO users (id, email, name, password_hash) VALUES ('owner', 'owner@example.test', 'Owner', ''), ('other', 'other@example.test', 'Other', '');
     INSERT INTO projects (id, user_id, name) VALUES ('project', 'owner', 'Project'), ('foreign-project', 'other', 'Other');
     INSERT INTO documents (id, project_id, title, r2_key) VALUES ('document', 'project', 'Draft', 'original.md'), ('other-document', 'project', 'Other draft', 'original.md'), ('foreign-document', 'foreign-project', 'Private draft', 'original.md');
     INSERT INTO reviews (id, document_id, revision_number, r2_key) VALUES ('review', 'document', 0, 'review.json'), ('other-review', 'other-document', 0, 'review.json'), ('foreign-review', 'foreign-document', 0, 'review.json');

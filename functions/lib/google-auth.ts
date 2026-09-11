@@ -225,7 +225,7 @@ async function resolveUser(env: Env, input: ResolveInput): Promise<string | null
   const newUserId = crypto.randomUUID();
   const displayName = name?.trim() || email.split("@")[0];
 
-  await env.DB.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, NULL)")
+  await env.DB.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, '')")
     .bind(newUserId, email, displayName)
     .run();
 
