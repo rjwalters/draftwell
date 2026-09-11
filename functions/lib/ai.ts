@@ -2,16 +2,13 @@ import { compareDocuments, EloRanking } from "../../packages/review-panel/src/co
 import { reviewDocument } from "../../packages/review-panel/src/index";
 import { scoreDocument } from "../../packages/review-panel/src/scoring";
 import { check, defaultStyleguide } from "../../packages/styleguide/src/index";
-import {
-  buildRefinementPrompt,
-  buildRevisionPrompt,
-  callClaudeAPI,
-  estimateTokens,
-  parseRevisionResponse,
-} from "./pipeline";
+import { generateCandidate } from "./candidates";
+import { callClaudeAPI, estimateTokens } from "./pipeline";
 import { verifyProjectOwnership } from "./projects";
+import { requireRevision } from "./revisions";
 import { error, json } from "./shared";
 import type { Document, Env } from "./types";
+import { loadWritingVoice } from "./writing-voice";
 
 /** Get the Claude API key from request header or environment */
 function getApiKey(env: Env, request: Request): string | null {
@@ -64,7 +61,7 @@ export async function handleGenerateReview(
   }
 
   const doc = await env.DB.prepare(
-    "SELECT id, project_id, title, current_revision, r2_key FROM documents WHERE id = ? AND project_id = ?",
+    "SELECT id, project_id, title, voice_profile_id, current_revision, r2_key FROM documents WHERE id = ? AND project_id = ?",
   )
     .bind(docId, projectId)
     .first<Document>();
@@ -80,19 +77,24 @@ export async function handleGenerateReview(
   const content = object ? await object.text() : "";
   if (!content.trim()) return error("Document is empty", 400);
 
+  const input = (await request.json()) as { baseRevision?: unknown };
+  if (requireRevision(input.baseRevision) !== doc.current_revision)
+    return error("Document changed. Save and review again.", 409);
+  const voice = await loadWritingVoice(env, userId, doc.voice_profile_id);
+
   // Phase 1: Run styleguide check (pure regex, no AI calls)
   const styleguideReport = check(content, defaultStyleguide);
 
   // Phase 2: Run multi-persona review
   const gatewayUrl = getGatewayUrl(env);
   const callModel = (prompt: string) =>
-    callClaudeAPI(prompt, apiKey, {
+    callClaudeAPI(voice.context ? `${prompt}\n\n${voice.context}` : prompt, apiKey, {
       maxTokens: 4096,
       gatewayUrl,
       gatewayToken: env.AI_GATEWAY_TOKEN,
     });
 
-  const aggregatedReview = await reviewDocument(content, { callModel });
+  const aggregatedReview = await reviewDocument(content, { callModel, voiceProfile: voice.rules });
 
   // Build combined summary
   const personaSummaries = aggregatedReview.personaReviews.map((pr) => pr.summary).join(" ");
@@ -188,6 +190,16 @@ export async function handleGenerateReview(
     });
   }
 
+  if (itemRecords.length)
+    await env.DB.batch(
+      itemRecords.map((item) =>
+        env.DB.prepare("UPDATE review_items SET metadata_json = ? WHERE id = ?").bind(
+          JSON.stringify(item),
+          item.id,
+        ),
+      ),
+    );
+
   return json(
     {
       review: {
@@ -278,24 +290,22 @@ export async function handleGetReview(
 
   // Fetch items from D1
   const { results: items } = await env.DB.prepare(
-    "SELECT id, review_id, category, description, severity, location, status FROM review_items WHERE review_id = ?",
+    "SELECT id, review_id, category, description, severity, location, status, metadata_json FROM review_items WHERE review_id = ?",
   )
     .bind(reviewId)
     .all();
 
-  // Fetch summary from R2
   const object = await env.CONTENT_BUCKET.get(review.r2_key);
-  let summary = "";
-  if (object) {
-    try {
-      const data = JSON.parse(await object.text());
-      summary = data.summary || "";
-    } catch {
-      /* ignore parse errors */
-    }
-  }
-
-  return json({ review: { ...review, summary }, items });
+  const data = object ? JSON.parse(await object.text()) : {};
+  return json({
+    review: { ...review, summary: data.summary || "" },
+    items: items.map((item) => {
+      const { metadata_json, ...fields } = item;
+      return { ...(typeof metadata_json === "string" ? JSON.parse(metadata_json) : {}), ...fields };
+    }),
+    styleguide: data.styleguide ?? null,
+    stats: data.stats ?? null,
+  });
 }
 
 export async function handleUpdateReviewItem(
@@ -342,107 +352,7 @@ export async function handleGenerateRevision(
   docId: string,
   userId: string,
 ): Promise<Response> {
-  if (!(await verifyProjectOwnership(env, projectId, userId))) {
-    return error("Project not found", 404);
-  }
-
-  const body = (await request.json()) as { reviewId: string };
-  if (!body.reviewId) return error("reviewId is required");
-
-  const doc = await env.DB.prepare(
-    "SELECT id, project_id, title, current_revision, r2_key FROM documents WHERE id = ? AND project_id = ?",
-  )
-    .bind(docId, projectId)
-    .first<Document>();
-
-  if (!doc) return error("Document not found", 404);
-
-  const apiKey = getApiKey(env, request);
-  if (!apiKey)
-    return error("API key required. Set ANTHROPIC_API_KEY or pass x-anthropic-key header.", 400);
-
-  // Fetch document content
-  const docObject = await env.CONTENT_BUCKET.get(doc.r2_key);
-  const content = docObject ? await docObject.text() : "";
-
-  // Fetch open review items
-  const { results: openItems } = await env.DB.prepare(
-    "SELECT id, category, description, severity, location, status FROM review_items WHERE review_id = ? AND status IN ('open', 'partial')",
-  )
-    .bind(body.reviewId)
-    .all<{
-      id: string;
-      category: string;
-      description: string;
-      severity: string;
-      location: string | null;
-      status: string;
-    }>();
-
-  if (openItems.length === 0) return error("No open review items to address", 400);
-
-  // Generate revision
-  const prompt = buildRevisionPrompt(content, openItems);
-  const response = await callClaudeAPI(prompt, apiKey, {
-    maxTokens: 8192,
-    gatewayUrl: getGatewayUrl(env),
-    gatewayToken: env.AI_GATEWAY_TOKEN,
-  });
-  const result = parseRevisionResponse(response);
-
-  // Store revised document as new revision
-  const newRevision = doc.current_revision + 1;
-  const newR2Key = `users/${userId}/projects/${projectId}/documents/${docId}/rev_${newRevision}.md`;
-  await env.CONTENT_BUCKET.put(newR2Key, result.revisedDocument);
-
-  const now = new Date().toISOString();
-
-  // Create revision record
-  const revisionId = crypto.randomUUID();
-  await env.DB.prepare(
-    "INSERT INTO revisions (id, document_id, revision_number, r2_key, created_at) VALUES (?, ?, ?, ?, ?)",
-  )
-    .bind(revisionId, docId, newRevision, newR2Key, now)
-    .run();
-
-  // Update document to point to new revision
-  await env.DB.prepare(
-    "UPDATE documents SET current_revision = ?, r2_key = ?, updated_at = ? WHERE id = ?",
-  )
-    .bind(newRevision, newR2Key, now, docId)
-    .run();
-
-  // Update review item statuses based on AI's change tracking
-  for (const change of result.changes) {
-    const itemIndex = change.reviewItemIndex - 1; // 1-indexed from AI
-    if (itemIndex >= 0 && itemIndex < openItems.length) {
-      const newStatus =
-        change.status === "addressed"
-          ? "addressed"
-          : change.status === "partial"
-            ? "partial"
-            : "open";
-      await env.DB.prepare("UPDATE review_items SET status = ? WHERE id = ?")
-        .bind(newStatus, openItems[itemIndex].id)
-        .run();
-    }
-  }
-
-  return json(
-    {
-      revision: {
-        id: revisionId,
-        document_id: docId,
-        revision_number: newRevision,
-        created_at: now,
-      },
-      changes: result.changes,
-      summary: result.overallSummary,
-      previousContent: content,
-      revisedContent: result.revisedDocument,
-    },
-    201,
-  );
+  return generateCandidate(env, request, projectId, docId, userId, false);
 }
 
 export async function handleGenerateRefinement(
@@ -452,109 +362,7 @@ export async function handleGenerateRefinement(
   docId: string,
   userId: string,
 ): Promise<Response> {
-  if (!(await verifyProjectOwnership(env, projectId, userId))) {
-    return error("Project not found", 404);
-  }
-
-  const body = (await request.json()) as { reviewId: string };
-  if (!body.reviewId) return error("reviewId is required");
-
-  const doc = await env.DB.prepare(
-    "SELECT id, project_id, title, current_revision, r2_key FROM documents WHERE id = ? AND project_id = ?",
-  )
-    .bind(docId, projectId)
-    .first<Document>();
-
-  if (!doc) return error("Document not found", 404);
-
-  const apiKey = getApiKey(env, request);
-  if (!apiKey)
-    return error("API key required. Set ANTHROPIC_API_KEY or pass x-anthropic-key header.", 400);
-
-  // Fetch current document content
-  const docObject = await env.CONTENT_BUCKET.get(doc.r2_key);
-  const content = docObject ? await docObject.text() : "";
-
-  // Fetch remaining open/partial items
-  const { results: remainingItems } = await env.DB.prepare(
-    "SELECT id, category, description, severity, location, status FROM review_items WHERE review_id = ? AND status IN ('open', 'partial')",
-  )
-    .bind(body.reviewId)
-    .all<{
-      id: string;
-      category: string;
-      description: string;
-      severity: string;
-      location: string | null;
-      status: string;
-    }>();
-
-  if (remainingItems.length === 0) {
-    return json({ message: "All review items have been addressed. No refinement needed." });
-  }
-
-  // Generate refinement
-  const prompt = buildRefinementPrompt(content, remainingItems);
-  const response = await callClaudeAPI(prompt, apiKey, {
-    maxTokens: 8192,
-    gatewayUrl: getGatewayUrl(env),
-    gatewayToken: env.AI_GATEWAY_TOKEN,
-  });
-  const result = parseRevisionResponse(response);
-
-  // Store refined document as new revision
-  const newRevision = doc.current_revision + 1;
-  const newR2Key = `users/${userId}/projects/${projectId}/documents/${docId}/rev_${newRevision}.md`;
-  await env.CONTENT_BUCKET.put(newR2Key, result.revisedDocument);
-
-  const now = new Date().toISOString();
-
-  const revisionId = crypto.randomUUID();
-  await env.DB.prepare(
-    "INSERT INTO revisions (id, document_id, revision_number, r2_key, created_at) VALUES (?, ?, ?, ?, ?)",
-  )
-    .bind(revisionId, docId, newRevision, newR2Key, now)
-    .run();
-
-  await env.DB.prepare(
-    "UPDATE documents SET current_revision = ?, r2_key = ?, updated_at = ? WHERE id = ?",
-  )
-    .bind(newRevision, newR2Key, now, docId)
-    .run();
-
-  // Update review item statuses
-  for (const change of result.changes) {
-    const itemIndex = change.reviewItemIndex - 1;
-    if (itemIndex >= 0 && itemIndex < remainingItems.length) {
-      const newStatus =
-        change.status === "addressed"
-          ? "addressed"
-          : change.status === "partial"
-            ? "partial"
-            : "open";
-      await env.DB.prepare("UPDATE review_items SET status = ? WHERE id = ?")
-        .bind(newStatus, remainingItems[itemIndex].id)
-        .run();
-    }
-  }
-
-  return json(
-    {
-      revision: {
-        id: revisionId,
-        document_id: docId,
-        revision_number: newRevision,
-        created_at: now,
-      },
-      changes: result.changes,
-      summary: result.overallSummary,
-      previousContent: content,
-      revisedContent: result.revisedDocument,
-      remainingOpenItems:
-        remainingItems.length - result.changes.filter((c) => c.status === "addressed").length,
-    },
-    201,
-  );
+  return generateCandidate(env, request, projectId, docId, userId, true);
 }
 
 export async function handleScoreDocument(
@@ -569,7 +377,7 @@ export async function handleScoreDocument(
   }
 
   const doc = await env.DB.prepare(
-    "SELECT id, project_id, title, current_revision, r2_key FROM documents WHERE id = ? AND project_id = ?",
+    "SELECT id, project_id, title, voice_profile_id, current_revision, r2_key FROM documents WHERE id = ? AND project_id = ?",
   )
     .bind(docId, projectId)
     .first<Document>();

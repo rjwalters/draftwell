@@ -1,58 +1,85 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+/** Mount once per loaded document so initial content is the saved baseline. */
 export function useAutoSave(
   content: string,
   onSave: (content: string) => Promise<void>,
   delayMs = 2000,
 ) {
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSavedRef = useRef(content);
-  const isSavingRef = useRef(false);
   const contentRef = useRef(content);
+  const savedRef = useRef(content);
   const saveRef = useRef(onSave);
-
+  const inFlight = useRef<Promise<void> | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [, refresh] = useState(0);
   contentRef.current = content;
   saveRef.current = onSave;
 
-  const save = useCallback(async (value: string) => {
-    if (isSavingRef.current || value === lastSavedRef.current) return;
-    isSavingRef.current = true;
-    try {
-      await saveRef.current(value);
-      lastSavedRef.current = value;
-    } finally {
-      isSavingRef.current = false;
-    }
+  const flush = useCallback((): Promise<void> => {
+    clearTimeout(timer.current);
+    if (inFlight.current) return inFlight.current;
+    if (contentRef.current === savedRef.current) return Promise.resolve();
+    setSaving(true);
+    setError(null);
+    const pending = (async () => {
+      // Capture every new edit, including ones arriving during a slow request or
+      // an unmount. A failed write never advances the saved baseline.
+      while (contentRef.current !== savedRef.current) {
+        const value = contentRef.current;
+        await saveRef.current(value);
+        savedRef.current = value;
+      }
+    })();
+    inFlight.current = pending
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Could not save your changes.");
+        throw err;
+      })
+      .finally(() => {
+        inFlight.current = null;
+        setSaving(false);
+      });
+    return inFlight.current;
+  }, []);
+
+  const markSaved = useCallback((value: string) => {
+    savedRef.current = value;
+    contentRef.current = value;
+    setError(null);
+    refresh((n) => n + 1);
   }, []);
 
   useEffect(() => {
-    if (content === lastSavedRef.current) return;
-
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
+    if (content !== savedRef.current) {
+      timer.current = setTimeout(() => {
+        void flush().catch(() => {});
+      }, delayMs);
     }
+    return () => clearTimeout(timer.current);
+  }, [content, delayMs, flush]);
 
-    timeoutRef.current = setTimeout(() => {
-      save(content);
-    }, delayMs);
-
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, [content, delayMs, save]);
-
-  // Flush on unmount
   useEffect(() => {
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-      const current = contentRef.current;
-      if (lastSavedRef.current !== current) {
-        save(current);
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (inFlight.current || contentRef.current !== savedRef.current) {
+        event.preventDefault();
+        event.returnValue = "";
       }
     };
-  }, [save]);
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      clearTimeout(timer.current);
+      void flush().catch(() => {});
+    };
+  }, [flush]);
+
+  return {
+    flush,
+    markSaved,
+    error,
+    isDirty: content !== savedRef.current || saving,
+    status: saving ? "saving" : content !== savedRef.current ? "unsaved" : "saved",
+  };
 }

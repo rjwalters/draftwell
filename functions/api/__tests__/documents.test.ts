@@ -12,6 +12,7 @@ function createMockDb() {
 
   return {
     prepare: vi.fn().mockReturnValue(mockStatement),
+    batch: vi.fn().mockResolvedValue([{ meta: { changes: 1 } }, { meta: { changes: 1 } }]),
     _statement: mockStatement,
   };
 }
@@ -256,7 +257,11 @@ describe("Document API Routes", () => {
       // verifyProjectOwnership
       mockDb._statement.first.mockResolvedValueOnce({ id: "proj-1" });
       // get existing doc
-      mockDb._statement.first.mockResolvedValueOnce({ id: "doc-1", current_revision: 2 });
+      mockDb._statement.first.mockResolvedValueOnce({
+        id: "doc-1",
+        project_id: "proj-1",
+        current_revision: 2,
+      });
       // insert revision
       mockDb._statement.run.mockResolvedValueOnce({ success: true });
       // update document
@@ -277,7 +282,7 @@ describe("Document API Routes", () => {
         db: mockDb,
         bucket: mockBucket,
         cookie: sessionCookie,
-        body: { content: "Updated content" },
+        body: { content: "Updated content", baseRevision: 2 },
       });
       const response = await onRequest(context);
       expect(response.status).toBe(200);

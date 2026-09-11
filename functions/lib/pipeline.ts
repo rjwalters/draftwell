@@ -87,31 +87,26 @@ export function parseRevisionResponse(raw: string): RevisionResult {
   const docMatch = raw.match(/REVISED_DOCUMENT_START\s*\n([\s\S]*?)\nREVISED_DOCUMENT_END/);
   const summaryMatch = raw.match(/CHANGE_SUMMARY_START\s*\n([\s\S]*?)\nCHANGE_SUMMARY_END/);
 
-  const revisedDocument = docMatch ? docMatch[1].trim() : raw.trim();
-  let changes: RevisionResult["changes"] = [];
-  let overallSummary = "Revision completed.";
-
-  if (summaryMatch) {
-    try {
-      const parsed = JSON.parse(summaryMatch[1].trim());
-      if (Array.isArray(parsed.changes)) {
-        changes = parsed.changes.map((c: Record<string, unknown>) => ({
-          reviewItemIndex: typeof c.reviewItemIndex === "number" ? c.reviewItemIndex : 0,
-          status: ["addressed", "partial", "not_addressed"].includes(c.status as string)
-            ? (c.status as "addressed" | "partial" | "not_addressed")
-            : "not_addressed",
-          explanation: typeof c.explanation === "string" ? c.explanation : "",
-        }));
-      }
-      if (typeof parsed.overallSummary === "string") {
-        overallSummary = parsed.overallSummary;
-      }
-    } catch {
-      // If JSON parsing fails, use defaults
-    }
+  if (!docMatch || !summaryMatch || !docMatch[1].trim())
+    throw new Error("The model returned an incomplete revision. No document was changed.");
+  const parsed = JSON.parse(summaryMatch[1].trim());
+  if (!Array.isArray(parsed.changes) || typeof parsed.overallSummary !== "string")
+    throw new Error("Invalid revision summary");
+  for (const change of parsed.changes) {
+    if (
+      !change ||
+      !Number.isSafeInteger(change.reviewItemIndex) ||
+      change.reviewItemIndex < 1 ||
+      !["addressed", "partial", "not_addressed"].includes(change.status) ||
+      typeof change.explanation !== "string"
+    )
+      throw new Error("Invalid revision change");
   }
-
-  return { revisedDocument, changes, overallSummary };
+  return {
+    revisedDocument: docMatch[1].trim(),
+    changes: parsed.changes,
+    overallSummary: parsed.overallSummary,
+  };
 }
 
 /**

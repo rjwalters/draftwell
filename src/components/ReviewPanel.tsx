@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 interface ReviewItem {
@@ -38,16 +38,9 @@ interface Review {
   created_at: string;
 }
 
-interface RevisionResult {
-  revision: {
-    id: string;
-    revision_number: number;
-  };
-  changes: Array<{
-    reviewItemIndex: number;
-    status: string;
-    explanation: string;
-  }>;
+export interface RevisionProposal {
+  candidateId: string;
+  baseRevision: number;
   summary: string;
   previousContent: string;
   revisedContent: string;
@@ -56,8 +49,11 @@ interface RevisionResult {
 interface ReviewPanelProps {
   projectId: string;
   documentId: string;
-  onContentUpdate: (content: string) => void;
-  onRevision: (result: RevisionResult) => void;
+  beforeAction: () => Promise<number>;
+  onRevision: (result: RevisionProposal) => void;
+  onBusyChange: (busy: boolean) => void;
+  disabled?: boolean;
+  refreshKey: number;
 }
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -76,8 +72,11 @@ const STATUS_COLORS: Record<string, string> = {
 export function ReviewPanel({
   projectId,
   documentId,
-  onContentUpdate,
+  beforeAction,
   onRevision,
+  onBusyChange,
+  disabled = false,
+  refreshKey,
 }: ReviewPanelProps) {
   const [review, setReview] = useState<Review | null>(null);
   const [items, setItems] = useState<ReviewItem[]>([]);
@@ -91,108 +90,103 @@ export function ReviewPanel({
 
   const basePath = `/api/projects/${projectId}/documents/${documentId}`;
 
-  const generateReview = useCallback(async () => {
-    setIsReviewing(true);
-    setError(null);
-    setChangeSummary(null);
-    try {
-      const response = await fetch(`${basePath}/ai/review`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Failed to generate review");
-      }
+  const [history, setHistory] = useState<Review[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState("");
+  const sequence = useRef(0);
+  const busyRef = useRef(false);
+  const busy = isReviewing || isRevising || isRefining || isLoading || disabled;
+
+  const loadReview = useCallback(
+    async (id: string) => {
+      const ticket = ++sequence.current;
+      const response = await fetch(`${basePath}/reviews/${id}`, { credentials: "include" });
+      if (!response.ok) throw new Error("Could not load review");
       const data = await response.json();
+      if (ticket !== sequence.current) return;
       setReview(data.review);
       setItems(data.items);
       setStyleguideStats(data.styleguide ?? null);
       setReviewStats(data.stats ?? null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate review");
-    } finally {
-      setIsReviewing(false);
-    }
-  }, [basePath]);
+    },
+    [basePath],
+  );
 
-  const generateRevision = useCallback(async () => {
-    if (!review) return;
-    setIsRevising(true);
-    setError(null);
-    try {
-      const response = await fetch(`${basePath}/ai/revise`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ reviewId: review.id }),
-      });
-      if (!response.ok) {
+  // biome-ignore lint/correctness/useExhaustiveDependencies: accepted proposals change stored item statuses.
+  useEffect(() => {
+    let active = true;
+    setIsLoading(true);
+    void (async () => {
+      try {
+        const response = await fetch(`${basePath}/reviews`, { credentials: "include" });
+        if (!response.ok) throw new Error("Could not load review history");
         const data = await response.json();
-        throw new Error(data.error || "Failed to generate revision");
+        if (!active) return;
+        setHistory(data.reviews);
+        const id = selectedId || data.reviews[0]?.id;
+        if (id) await loadReview(id);
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : "Could not load reviews");
+      } finally {
+        if (active) setIsLoading(false);
       }
-      const data = (await response.json()) as RevisionResult;
-      setChangeSummary(data.summary);
-      onRevision(data);
-      onContentUpdate(data.revisedContent);
+    })();
+    return () => {
+      active = false;
+      sequence.current += 1;
+    };
+  }, [basePath, loadReview, refreshKey, selectedId]);
 
-      // Refresh review items to get updated statuses
-      const reviewResponse = await fetch(`${basePath}/reviews/${review.id}`, {
-        credentials: "include",
-      });
-      if (reviewResponse.ok) {
-        const reviewData = await reviewResponse.json();
-        setItems(reviewData.items);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate revision");
-    } finally {
-      setIsRevising(false);
-    }
-  }, [basePath, review, onContentUpdate, onRevision]);
-
-  const generateRefinement = useCallback(async () => {
-    if (!review) return;
-    setIsRefining(true);
-    setError(null);
-    try {
-      const response = await fetch(`${basePath}/ai/refine`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ reviewId: review.id }),
-      });
-      if (!response.ok) {
+  const run = useCallback(
+    async (kind: "review" | "revise" | "refine") => {
+      if (busyRef.current || disabled || (kind !== "review" && !review)) return;
+      busyRef.current = true;
+      onBusyChange(true);
+      const setBusy =
+        kind === "review" ? setIsReviewing : kind === "revise" ? setIsRevising : setIsRefining;
+      setBusy(true);
+      setError(null);
+      setChangeSummary(null);
+      try {
+        const baseRevision = await beforeAction();
+        const response = await fetch(`${basePath}/ai/${kind}`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ baseRevision, reviewId: review?.id }),
+        });
         const data = await response.json();
-        throw new Error(data.error || "Failed to refine");
+        if (!response.ok) throw new Error(data.error || "Could not complete the writing request");
+        if (kind === "review") {
+          setReview(data.review);
+          setItems(data.items);
+          setStyleguideStats(data.styleguide ?? null);
+          setReviewStats(data.stats ?? null);
+          setHistory((prev) => [
+            data.review,
+            ...prev.filter((entry) => entry.id !== data.review.id),
+          ]);
+          setSelectedId(data.review.id);
+        } else if (data.message) setChangeSummary(data.message);
+        else onRevision(data);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Writing request failed");
+      } finally {
+        setBusy(false);
+        busyRef.current = false;
+        onBusyChange(false);
       }
-      const data = await response.json();
-      if (data.message) {
-        setChangeSummary(data.message);
-      } else {
-        setChangeSummary(data.summary);
-        onRevision(data);
-        onContentUpdate(data.revisedContent);
-      }
+    },
+    [basePath, beforeAction, disabled, onBusyChange, onRevision, review],
+  );
 
-      // Refresh review items
-      const reviewResponse = await fetch(`${basePath}/reviews/${review.id}`, {
-        credentials: "include",
-      });
-      if (reviewResponse.ok) {
-        const reviewData = await reviewResponse.json();
-        setItems(reviewData.items);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refine");
-    } finally {
-      setIsRefining(false);
-    }
-  }, [basePath, review, onContentUpdate, onRevision]);
+  const generateReview = () => run("review");
+  const generateRevision = () => run("revise");
+  const generateRefinement = () => run("refine");
 
   const updateItemStatus = useCallback(
     async (itemId: string, status: string) => {
-      if (!review) return;
+      if (!review || busy) return;
       try {
         const response = await fetch(`${basePath}/reviews/${review.id}/items/${itemId}`, {
           method: "PATCH",
@@ -200,18 +194,17 @@ export function ReviewPanel({
           credentials: "include",
           body: JSON.stringify({ status }),
         });
-        if (response.ok) {
-          setItems((prev) =>
-            prev.map((item) =>
-              item.id === itemId ? { ...item, status: status as ReviewItem["status"] } : item,
-            ),
-          );
-        }
-      } catch {
-        // Silently fail for status updates
+        if (!response.ok) throw new Error("Could not update this finding");
+        setItems((prev) =>
+          prev.map((item) =>
+            item.id === itemId ? { ...item, status: status as ReviewItem["status"] } : item,
+          ),
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not update this finding");
       }
     },
-    [basePath, review],
+    [basePath, review, busy],
   );
 
   const openCount = items.filter((i) => i.status === "open").length;
@@ -228,15 +221,10 @@ export function ReviewPanel({
         <div className="flex items-center gap-2">
           {review && hasOpenItems && (
             <>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={generateRefinement}
-                disabled={isRefining}
-              >
+              <Button size="sm" variant="outline" onClick={generateRefinement} disabled={busy}>
                 {isRefining ? "Refining..." : "Refine"}
               </Button>
-              <Button size="sm" onClick={generateRevision} disabled={isRevising}>
+              <Button size="sm" onClick={generateRevision} disabled={busy}>
                 {isRevising ? "Revising..." : "Revise"}
               </Button>
             </>
@@ -245,13 +233,36 @@ export function ReviewPanel({
             size="sm"
             variant={review ? "outline" : "default"}
             onClick={generateReview}
-            disabled={isReviewing}
+            disabled={busy}
           >
             {isReviewing ? "Reviewing..." : review ? "Re-Review" : "Review"}
           </Button>
         </div>
       </div>
 
+      {history.length > 0 && (
+        <label className="px-4 py-2 text-xs text-muted-foreground">
+          Review history
+          <select
+            className="ml-2 max-w-full rounded border bg-background p-1"
+            aria-label="Review history"
+            disabled={busy}
+            value={selectedId || review?.id || ""}
+            onChange={(e) => setSelectedId(e.target.value)}
+          >
+            {history.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                Revision {entry.revision_number} · {new Date(entry.created_at).toLocaleString()}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {isLoading && (
+        <p className="px-4 text-sm" role="status">
+          Loading reviews…
+        </p>
+      )}
       {/* Content */}
       <div className="flex-1 overflow-auto px-4 py-3">
         {error && (
@@ -420,6 +431,7 @@ export function ReviewPanel({
                       <button
                         type="button"
                         className="rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
+                        disabled={busy}
                         onClick={() => updateItemStatus(item.id, "dismissed")}
                       >
                         Dismiss
@@ -428,6 +440,7 @@ export function ReviewPanel({
                         <button
                           type="button"
                           className="rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
+                          disabled={busy}
                           onClick={() => updateItemStatus(item.id, "addressed")}
                         >
                           Mark Addressed
