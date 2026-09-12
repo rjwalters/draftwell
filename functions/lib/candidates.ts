@@ -1,13 +1,9 @@
-import {
-  buildRefinementPrompt,
-  buildRevisionPrompt,
-  callClaudeAPI,
-  parseRevisionResponse,
-} from "./pipeline";
+import { buildRefinementPrompt, buildRevisionPrompt, parseRevisionResponse } from "./pipeline";
 import { verifyProjectOwnership } from "./projects";
 import { requireRevision, saveRevision } from "./revisions";
 import { error, json } from "./shared";
 import type { Document, Env } from "./types";
+import { callWritingModel } from "./writing-model";
 import { loadWritingVoice } from "./writing-voice";
 
 interface Change {
@@ -19,7 +15,7 @@ interface Change {
 interface Candidate {
   id: string;
   document_id: string;
-  review_id: string;
+  review_id: string | null;
   base_revision: number;
   content: string;
   changes_json: string;
@@ -65,8 +61,6 @@ export async function generateCandidate(
         409,
       );
   }
-  const apiKey = request.headers.get("x-anthropic-key") || env.ANTHROPIC_API_KEY;
-  if (!apiKey) return error("Writing review is not configured.", 503);
   const object = await env.CONTENT_BUCKET.get(doc.r2_key);
   if (!object) return error("Document content is unavailable", 503);
   const content = await object.text();
@@ -85,13 +79,7 @@ export async function generateCandidate(
   if (!items.length) return json({ message: "All review items have been addressed." });
   const voice = await loadWritingVoice(env, userId, doc.voice_profile_id);
   const prompt = (refine ? buildRefinementPrompt : buildRevisionPrompt)(content, items);
-  const raw = await callClaudeAPI(`${prompt}\n\n${voice.context}`, apiKey, {
-    maxTokens: 8192,
-    gatewayUrl: env.AI_GATEWAY
-      ? `https://gateway.ai.cloudflare.com/v1/${env.AI_GATEWAY}`
-      : undefined,
-    gatewayToken: env.AI_GATEWAY_TOKEN,
-  });
+  const raw = await callWritingModel(env, request, `${prompt}\n\n${voice.context}`, 8192);
   const result = parseRevisionResponse(raw);
   const changes: Change[] = result.changes.flatMap((change) => {
     const item = items[change.reviewItemIndex - 1];

@@ -2,7 +2,7 @@
 
 Draftwell is an editor for iterative document review. Write in Markdown, get critical feedback, preview a proposed revision, and decide which version to keep.
 
-The application includes projects and documents, email/password and Google sign-in, a Monaco editor with preview and autosave, author voice profiles, persisted reviews, revision proposals with word-level diffs, and PDF export. Accepted revisions are stored as immutable R2 objects with D1 metadata. Saves use a base revision to detect conflicts instead of overwriting newer work.
+The application includes AI drafting from a prompt, editable document titles, projects and documents, email/password and Google sign-in, a Monaco editor with preview and autosave, author voice profiles, persisted reviews, revision proposals with word-level diffs, and PDF export. Accepted revisions are stored as immutable R2 objects with D1 metadata. Saves use a base revision to detect conflicts instead of overwriting newer work.
 
 Author voice can be selected in the editor. Review and revision receive the selected profile and up to three original writing samples. Review history retains suggestions, critic metadata, and finding statuses. Generating a proposal does not change the document or resolve findings; accepting it does both together.
 
@@ -44,10 +44,14 @@ Copy `.dev.vars.example` to `.dev.vars` and fill only the integrations you want 
 
 | Variable | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Model-driven review and revision |
+| `ANTHROPIC_API_KEY` | Optional Claude provider for drafting/review/revision; required for scoring/comparison |
 | `AI_GATEWAY`, `AI_GATEWAY_TOKEN` | Optional Cloudflare AI Gateway routing and authentication |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in; register the matching `/api/auth/google/callback` redirect URI with Google |
 | `ANVIL_URL`, `ANVIL_TOKEN` | Optional writing-check runner; see below |
+
+Drafting, review, and revision use the Workers AI binding by default. Set `ANTHROPIC_API_KEY` to use Claude instead. Scoring and comparison still require a Claude key.
+
+Open a document and choose **Write with AI**, describe what to write, and select **Generate draft**. Inspect the proposal and choose **Accept revision** to save it. Empty documents show the prompt form automatically. To rename a document, edit its title at the top and select **Save title**.
 
 Voice analysis uses the Workers AI binding. Its model is now the supported [`llama-3.3-70b-instruct-fp8-fast`](https://developers.cloudflare.com/changelog/post/2026-05-08-planned-model-deprecations/) variant, replacing the retired model name. Live Google, Workers AI, and Claude flows require their corresponding provider configuration.
 

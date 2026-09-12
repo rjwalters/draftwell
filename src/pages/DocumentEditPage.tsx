@@ -1,4 +1,4 @@
-import { Download } from "lucide-react";
+import { Download, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { MarkdownEditor } from "@/components/MarkdownEditor";
@@ -83,6 +83,13 @@ function DocumentWorkspace({
   const draftKey = `draftwell:unsaved:${projectId}:${documentId}`;
   const revision = useRef(initial.document.current_revision);
   const [content, setContent] = useState(initial.content);
+  const [title, setTitle] = useState(initial.document.title);
+  const [titleInput, setTitleInput] = useState(initial.document.title);
+  const [savingTitle, setSavingTitle] = useState(false);
+  const [titleSaved, setTitleSaved] = useState(false);
+  const [showWriter, setShowWriter] = useState(!initial.content.trim());
+  const [writingPrompt, setWritingPrompt] = useState("");
+  const [generating, setGenerating] = useState(false);
   const [view, setView] = useState<"edit" | "split" | "preview">("split");
   const [showReview, setShowReview] = useState(false);
   const [proposal, setProposal] = useState<RevisionProposal | null>(null);
@@ -179,6 +186,51 @@ function DocumentWorkspace({
       setAccepting(false);
     }
   };
+  const saveTitle = async () => {
+    if (!titleInput.trim() || savingTitle) return;
+    setSavingTitle(true);
+    setError(null);
+    try {
+      const response = await fetch(basePath, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: titleInput.trim() }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not rename document");
+      setTitle(data.document.title);
+      setTitleInput(data.document.title);
+      setTitleSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not rename document");
+    } finally {
+      setSavingTitle(false);
+    }
+  };
+  const generateDraft = async () => {
+    if (busy || accepting || proposal || !writingPrompt.trim()) return;
+    setGenerating(true);
+    setBusy(true);
+    setError(null);
+    try {
+      const baseRevision = await beforeAction();
+      const response = await fetch(`${basePath}/ai/draft`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: writingPrompt.trim(), baseRevision }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not generate a draft");
+      setProposal(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not generate a draft");
+    } finally {
+      setGenerating(false);
+      setBusy(false);
+    }
+  };
   const updateVoice = async (id: string) => {
     setBusy(true);
     setError(null);
@@ -226,7 +278,34 @@ function DocumentWorkspace({
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Link to={`/projects/${projectId}`}>Project</Link>
           <span>/</span>
-          <span>{initial.document.title}</span>
+          <form
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveTitle();
+            }}
+          >
+            <input
+              aria-label="Document title"
+              className="w-48 rounded border border-transparent bg-transparent px-2 py-1 text-sm text-foreground hover:border-input focus:border-input"
+              value={titleInput}
+              disabled={savingTitle || busy || accepting}
+              onChange={(event) => {
+                setTitleInput(event.target.value);
+                setTitleSaved(false);
+              }}
+            />
+            {titleInput !== title && (
+              <Button
+                size="sm"
+                type="submit"
+                disabled={!titleInput.trim() || savingTitle || busy || accepting}
+              >
+                {savingTitle ? "Saving title…" : "Save title"}
+              </Button>
+            )}
+            {titleSaved && <span role="status">Title saved</span>}
+          </form>
           <span role="status">
             {autosave.status === "saving"
               ? "Saving…"
@@ -236,6 +315,10 @@ function DocumentWorkspace({
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-1">
+          <Button size="sm" disabled={busy || accepting} onClick={() => setShowWriter(!showWriter)}>
+            <Sparkles className="mr-1 h-3.5 w-3.5" />
+            Write with AI
+          </Button>
           <select
             aria-label="Author voice"
             value={voiceId}
@@ -281,7 +364,7 @@ function DocumentWorkspace({
             variant="ghost"
             onClick={() => {
               void import("@/lib/pdf-export")
-                .then(({ exportToPdf }) => exportToPdf(content, initial.document.title))
+                .then(({ exportToPdf }) => exportToPdf(content, title))
                 .catch(() => setError("Could not export PDF"));
             }}
           >
@@ -290,6 +373,44 @@ function DocumentWorkspace({
           </Button>
         </div>
       </div>
+      {showWriter && (
+        <form
+          className="space-y-3 border-b bg-muted/30 p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void generateDraft();
+          }}
+        >
+          <label htmlFor="writing-prompt" className="block text-sm font-medium">
+            What would you like to write?
+          </label>
+          <textarea
+            id="writing-prompt"
+            className="min-h-20 w-full rounded-md border bg-background p-3 text-sm"
+            placeholder="Describe the topic, audience, tone, and key points. You can also ask for changes to the current draft."
+            value={writingPrompt}
+            onChange={(event) => setWritingPrompt(event.target.value)}
+            maxLength={6000}
+            disabled={busy || accepting}
+          />
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="submit"
+              disabled={!writingPrompt.trim() || busy || accepting || !!proposal}
+            >
+              {generating ? "Writing…" : "Generate draft"}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Preview the proposed text, then accept it when you’re ready.
+            </p>
+          </div>
+          {generating && (
+            <p role="status" className="text-sm">
+              Writing your draft. This may take a minute…
+            </p>
+          )}
+        </form>
+      )}
       {recovery && (
         <div className="flex items-center gap-3 border-b p-3 text-sm">
           <p>A locally saved draft is available. Restoring it replaces the text shown here.</p>

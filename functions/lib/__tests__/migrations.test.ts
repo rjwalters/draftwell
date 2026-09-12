@@ -26,6 +26,15 @@ it("preserves existing account data when upgrading the original production schem
     ]) {
       db.exec(readFileSync(`migrations/${migration}`, "utf8"));
     }
+    db.exec(`
+      INSERT INTO reviews (id, document_id, revision_number, r2_key) VALUES ('review', 'd', 1, 'review.json');
+      INSERT INTO revision_candidates (id, document_id, review_id, base_revision, content, changes_json, summary, created_at)
+      VALUES ('candidate', 'd', 'review', 1, 'Existing proposal', '[]', 'Summary', '2026-09-11');
+    `);
+    db.exec(readFileSync("migrations/0005_draft_candidates.sql", "utf8"));
+    expect(
+      db.prepare("SELECT content, review_id FROM revision_candidates WHERE id = 'candidate'").get(),
+    ).toEqual({ content: "Existing proposal", review_id: "review" });
     for (const table of ["users", "sessions", "projects", "documents", "revisions"]) {
       expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count).toBe(1);
     }

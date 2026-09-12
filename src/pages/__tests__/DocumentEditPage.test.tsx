@@ -22,6 +22,7 @@ vi.mock("@/components/MarkdownEditor", () => ({
   ),
 }));
 let saved: string;
+let title: string;
 let revision: number;
 let failSave: boolean;
 let delayedProposal: ((response: Response) => void) | null;
@@ -48,6 +49,7 @@ const candidate = () => ({
 
 beforeEach(() => {
   saved = "Original draft";
+  title = "Draft";
   revision = 0;
   failSave = false;
   delayedProposal = null;
@@ -60,9 +62,13 @@ beforeEach(() => {
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/voice/profiles") return response({ profiles: [] });
       if (url.endsWith("/documents/d") && init?.method === "PUT") {
-        putCount += 1;
         if (failSave) return response({ error: "Offline. Please retry." }, 503);
         const body = JSON.parse(init.body as string);
+        if (body.title !== undefined) {
+          title = body.title;
+          return response({ document: { title, current_revision: revision } });
+        }
+        putCount += 1;
         if (body.baseRevision !== revision) return response({ error: "Conflict" }, 409);
         saved = body.content;
         revision += 1;
@@ -71,7 +77,7 @@ beforeEach(() => {
       if (url.endsWith("/documents/d"))
         return response({
           content: saved,
-          document: { title: "Draft", current_revision: revision },
+          document: { title, current_revision: revision },
         });
       if (url.endsWith("/reviews")) return response({ reviews: [review] });
       if (url.endsWith("/reviews/r"))
@@ -92,6 +98,14 @@ beforeEach(() => {
       if (url.endsWith("/ai/review")) {
         expect(JSON.parse(init?.body as string).baseRevision).toBe(revision);
         return response({ review, items: [] }, 201);
+      }
+      if (url.endsWith("/ai/draft")) {
+        expect(JSON.parse(init?.body as string).baseRevision).toBe(revision);
+        if (delayProposal)
+          return new Promise<Response>((resolve) => {
+            delayedProposal = resolve;
+          });
+        return response(candidate(), 201);
       }
       if (url.endsWith("/ai/revise")) {
         if (delayProposal)
@@ -216,4 +230,52 @@ it("offers local draft recovery without silently replacing the server version", 
   expect(editor).toHaveValue("Original draft");
   fireEvent.click(screen.getByRole("button", { name: "Restore draft" }));
   expect(editor).toHaveValue("Recovered words");
+});
+
+it("offers first-draft generation in an empty document and previews before acceptance", async () => {
+  saved = "";
+  const editor = await load();
+  fireEvent.change(screen.getByRole("textbox", { name: "What would you like to write?" }), {
+    target: { value: "An introduction to our garden" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Generate draft" }));
+  await screen.findByRole("button", { name: "Accept revision" });
+  expect(editor).toHaveValue("");
+  expect(putCount).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: "Accept revision" }));
+  await waitFor(() => expect(editor).toHaveValue("Improved draft"));
+  expect(acceptCount).toBe(1);
+});
+
+it("flushes edits before prompted drafting and protects changes made during generation", async () => {
+  const editor = await load();
+  fireEvent.click(screen.getByRole("button", { name: "Write with AI" }));
+  fireEvent.change(editor, { target: { value: "New starting point" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "What would you like to write?" }), {
+    target: { value: "Expand the introduction" },
+  });
+  delayProposal = true;
+  fireEvent.click(screen.getByRole("button", { name: "Generate draft" }));
+  await waitFor(() => expect(delayedProposal).not.toBeNull());
+  expect(saved).toBe("New starting point");
+  const generated = candidate();
+  fireEvent.change(editor, { target: { value: "Newer edits" } });
+  await act(async () => {
+    delayedProposal?.(response(generated, 201));
+  });
+  expect(editor).toHaveValue("Newer edits");
+  expect(screen.getByRole("button", { name: "Accept revision" })).toBeDisabled();
+});
+
+it("renames a document without saving content or advancing its revision", async () => {
+  await load();
+  fireEvent.change(screen.getByRole("textbox", { name: "Document title" }), {
+    target: { value: "Garden proposal" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save title" }));
+  await screen.findByText("Title saved");
+  expect(title).toBe("Garden proposal");
+  expect(saved).toBe("Original draft");
+  expect(revision).toBe(0);
+  expect(putCount).toBe(0);
 });

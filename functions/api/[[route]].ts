@@ -31,6 +31,7 @@ import {
   handleGetDocuments,
   handleUpdateDocument,
 } from "../lib/documents";
+import { handleGenerateDraft } from "../lib/drafting";
 import { handleGoogleAuth, handleGoogleCallback } from "../lib/google-auth";
 import {
   handleCreateProject,
@@ -184,6 +185,13 @@ export const onRequest: PagesFunction<Env> = async (context) => {
       const user = await getAuthenticatedUser(env, request);
       if (!user) return error("Unauthorized", 401);
       return await handleWritingCheck(env, request, checkMatch[1], checkMatch[2], user.id);
+    }
+
+    const draftMatch = path.match(/^\/api\/projects\/([^/]+)\/documents\/([^/]+)\/ai\/draft$/);
+    if (draftMatch && method === "POST") {
+      const user = await getAuthenticatedUser(env, request);
+      if (!user) return error("Unauthorized", 401);
+      return await handleGenerateDraft(env, request, draftMatch[1], draftMatch[2], user.id);
     }
 
     // AI Review endpoints

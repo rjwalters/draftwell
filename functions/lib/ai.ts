@@ -8,6 +8,7 @@ import { verifyProjectOwnership } from "./projects";
 import { requireRevision } from "./revisions";
 import { error, json } from "./shared";
 import type { Document, Env } from "./types";
+import { callWritingModel } from "./writing-model";
 import { loadWritingVoice } from "./writing-voice";
 
 /** Get the Claude API key from request header or environment */
@@ -68,10 +69,6 @@ export async function handleGenerateReview(
 
   if (!doc) return error("Document not found", 404);
 
-  const apiKey = getApiKey(env, request);
-  if (!apiKey)
-    return error("API key required. Set ANTHROPIC_API_KEY or pass x-anthropic-key header.", 400);
-
   // Fetch document content from R2
   const object = await env.CONTENT_BUCKET.get(doc.r2_key);
   const content = object ? await object.text() : "";
@@ -86,13 +83,8 @@ export async function handleGenerateReview(
   const styleguideReport = check(content, defaultStyleguide);
 
   // Phase 2: Run multi-persona review
-  const gatewayUrl = getGatewayUrl(env);
   const callModel = (prompt: string) =>
-    callClaudeAPI(voice.context ? `${prompt}\n\n${voice.context}` : prompt, apiKey, {
-      maxTokens: 4096,
-      gatewayUrl,
-      gatewayToken: env.AI_GATEWAY_TOKEN,
-    });
+    callWritingModel(env, request, voice.context ? `${prompt}\n\n${voice.context}` : prompt);
 
   const aggregatedReview = await reviewDocument(content, { callModel, voiceProfile: voice.rules });
 
