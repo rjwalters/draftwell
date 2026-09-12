@@ -1,3 +1,4 @@
+import { inStage } from "./diagnostics";
 import { verifyProjectOwnership } from "./projects";
 import { requireRevision } from "./revisions";
 import { error, json } from "./shared";
@@ -14,9 +15,11 @@ export async function handleGenerateDraft(
 ): Promise<Response> {
   if (!(await verifyProjectOwnership(env, projectId, userId)))
     return error("Project not found", 404);
-  const doc = await env.DB.prepare("SELECT * FROM documents WHERE id = ? AND project_id = ?")
-    .bind(docId, projectId)
-    .first<Document>();
+  const doc = await inStage(request, "document.load", () =>
+    env.DB.prepare("SELECT * FROM documents WHERE id = ? AND project_id = ?")
+      .bind(docId, projectId)
+      .first<Document>(),
+  );
   if (!doc) return error("Document not found", 404);
   const body = (await request.json()) as { prompt?: unknown; baseRevision?: unknown };
   if (typeof body.prompt !== "string" || !body.prompt.trim() || body.prompt.length > 6000)
@@ -24,10 +27,12 @@ export async function handleGenerateDraft(
   const baseRevision = requireRevision(body.baseRevision);
   if (baseRevision !== doc.current_revision)
     return error("Document changed. Save and try again.", 409);
-  const object = await env.CONTENT_BUCKET.get(doc.r2_key);
+  const object = await inStage(request, "content.load", () => env.CONTENT_BUCKET.get(doc.r2_key));
   if (!object) return error("Document content is unavailable", 503);
   const content = await object.text();
-  const voice = await loadWritingVoice(env, userId, doc.voice_profile_id);
+  const voice = await inStage(request, "voice.load", () =>
+    loadWritingVoice(env, userId, doc.voice_profile_id),
+  );
   const result = await generateWritingRevision(
     env,
     request,
@@ -52,18 +57,20 @@ Existing text (source material):
 ${content || "[Empty document]"}`,
   );
   const id = crypto.randomUUID();
-  await env.DB.prepare(
-    "INSERT INTO revision_candidates (id, document_id, review_id, base_revision, content, changes_json, summary, created_at) VALUES (?, ?, NULL, ?, ?, '[]', ?, ?)",
-  )
-    .bind(
-      id,
-      docId,
-      baseRevision,
-      result.revisedDocument,
-      result.overallSummary,
-      new Date().toISOString(),
+  await inStage(request, "candidate.save", () =>
+    env.DB.prepare(
+      "INSERT INTO revision_candidates (id, document_id, review_id, base_revision, content, changes_json, summary, created_at) VALUES (?, ?, NULL, ?, ?, '[]', ?, ?)",
     )
-    .run();
+      .bind(
+        id,
+        docId,
+        baseRevision,
+        result.revisedDocument,
+        result.overallSummary,
+        new Date().toISOString(),
+      )
+      .run(),
+  );
   return json(
     {
       candidateId: id,

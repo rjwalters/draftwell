@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface ReviewItem {
   id: string;
@@ -156,7 +157,8 @@ export function ReviewPanel({
           body: JSON.stringify({ baseRevision, reviewId: review?.id }),
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Could not complete the writing request");
+        if (!response.ok)
+          throw new Error(apiErrorMessage(data, "Could not complete the writing request"));
         if (kind === "review") {
           setReview(data.review);
           setItems(data.items);

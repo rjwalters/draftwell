@@ -95,3 +95,5 @@ Local drafts are retained when a save fails. Reopening the document offers an ex
 See [WORK_PLAN.md](WORK_PLAN.md), the [original audit](docs/PROJECT_AUDIT.md), and the [Anvil integration assessment](docs/ANVIL_INTEGRATION.md). The audit records the pre-change state; the work plan tracks implementation.
 
 MIT license.
+
+Troubleshooting: API errors include a request reference. Use `npm run diagnostics -- <request-id>` to inspect retained AI stage events and server failures; see [Troubleshooting](docs/TROUBLESHOOTING.md).

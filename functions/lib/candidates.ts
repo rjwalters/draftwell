@@ -1,3 +1,4 @@
+import { inStage } from "./diagnostics";
 import { buildRefinementPrompt, buildRevisionPrompt } from "./pipeline";
 import { verifyProjectOwnership } from "./projects";
 import { requireRevision, saveRevision } from "./revisions";
@@ -99,20 +100,22 @@ export async function generateCandidate(
       : [];
   });
   const id = crypto.randomUUID();
-  await env.DB.prepare(
-    "INSERT INTO revision_candidates (id, document_id, review_id, base_revision, content, changes_json, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-  )
-    .bind(
-      id,
-      docId,
-      review.id,
-      baseRevision,
-      result.revisedDocument,
-      JSON.stringify(changes),
-      result.overallSummary,
-      new Date().toISOString(),
+  await inStage(request, "candidate.save", () =>
+    env.DB.prepare(
+      "INSERT INTO revision_candidates (id, document_id, review_id, base_revision, content, changes_json, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .run();
+      .bind(
+        id,
+        docId,
+        review.id,
+        baseRevision,
+        result.revisedDocument,
+        JSON.stringify(changes),
+        result.overallSummary,
+        new Date().toISOString(),
+      )
+      .run(),
+  );
   return json(
     {
       candidateId: id,

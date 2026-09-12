@@ -93,6 +93,7 @@ export function parseRevisionResponse(raw: string): RevisionResult {
     throw new RequestError(
       "The AI returned an incomplete draft. Try requesting a shorter draft. Your document has not changed.",
       502,
+      "incomplete_output",
     );
   let parsed: unknown;
   try {
@@ -103,6 +104,7 @@ export function parseRevisionResponse(raw: string): RevisionResult {
     throw new RequestError(
       "The AI returned an invalid change summary. Please try again. Your document has not changed.",
       502,
+      "invalid_summary",
     );
   }
   if (
@@ -114,11 +116,13 @@ export function parseRevisionResponse(raw: string): RevisionResult {
     throw new RequestError(
       "The AI returned an invalid change summary. Please try again. Your document has not changed.",
       502,
+      "invalid_summary",
     );
   if (!Array.isArray(parsed.changes) || typeof parsed.overallSummary !== "string")
     throw new RequestError(
       "The AI returned an invalid change summary. Please try again. Your document has not changed.",
       502,
+      "invalid_summary",
     );
   for (const change of parsed.changes) {
     if (
@@ -131,6 +135,7 @@ export function parseRevisionResponse(raw: string): RevisionResult {
       throw new RequestError(
         "The AI returned invalid change details. Please try again. Your document has not changed.",
         502,
+        "invalid_changes",
       );
   }
   return {

@@ -12,9 +12,10 @@ Updated 2026-09-11. Implemented on `improve/writing-workflow`. The branch includ
 | P2 | Connect voice profiles to document review/revision | Implemented; per-document selection, ownership checks, profile rules and exemplar propagation |
 | P2 | Prove a pinned Anvil integration | Implemented; Python dependency/lock, authenticated runner, snapshot-bound API, editor checks, diff/evidence contract, tests |
 | P2 | Draft from a prompt and rename documents | Implemented; Workers AI default for drafting/reviews/revisions, preview and explicit acceptance, editable title |
+| P2 | Diagnose production failures | Implemented; correlated request references, AI stage logs, retained diagnostics, privacy and failure-isolation tests |
 | P3 | Update setup docs and CSS scanning | Implemented; actual architecture and commands, environment example, scoped Tailwind sources |
 
-Deployment prerequisites: apply all pending migrations (including `0005_draft_candidates.sql`) and configure provider secrets. The optional Anvil runner needs its own host and shared token; frontend deployment does not provision it. Local setup is documented in [README.md](README.md).
+Deployment prerequisites: apply all pending migrations (including `0006_request_diagnostics.sql`) and configure provider secrets. The optional Anvil runner needs its own host and shared token; frontend deployment does not provision it. Local setup is documented in [README.md](README.md).
 
 Later work, beyond the initial adapter:
 

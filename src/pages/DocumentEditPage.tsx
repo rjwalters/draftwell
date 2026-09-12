@@ -7,6 +7,7 @@ import { ReviewPanel, type RevisionProposal } from "@/components/ReviewPanel";
 import { RevisionDiff } from "@/components/RevisionDiff";
 import { Button } from "@/components/ui/button";
 import { useAutoSave } from "@/hooks/use-auto-save";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface LoadedDocument {
   content: string;
@@ -45,7 +46,8 @@ function DocumentLoader({ projectId, documentId }: { projectId: string; document
           credentials: "include",
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error("Failed to load document");
+        if (!response.ok)
+          throw new Error(apiErrorMessage(await response.json(), "Failed to load document"));
         setData(await response.json());
       } catch (err) {
         if (!controller.signal.aborted)
@@ -134,7 +136,8 @@ function DocumentWorkspace({
         body: JSON.stringify({ content: value, baseRevision: revision.current }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not save your changes. Please retry.");
+      if (!response.ok)
+        throw new Error(apiErrorMessage(data, "Could not save your changes. Please retry."));
       revision.current = data.document.current_revision;
       try {
         if (localStorage.getItem(draftKey) === value) localStorage.removeItem(draftKey);
@@ -173,7 +176,7 @@ function DocumentWorkspace({
         credentials: "include",
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not accept revision");
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Could not accept revision"));
       revision.current = data.revision;
       autosave.markSaved(data.content);
       setContent(data.content);
@@ -198,7 +201,7 @@ function DocumentWorkspace({
         body: JSON.stringify({ title: titleInput.trim() }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not rename document");
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Could not rename document"));
       setTitle(data.document.title);
       setTitleInput(data.document.title);
       setTitleSaved(true);
@@ -222,7 +225,7 @@ function DocumentWorkspace({
         body: JSON.stringify({ prompt: writingPrompt.trim(), baseRevision }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not generate a draft");
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Could not generate a draft"));
       setProposal(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not generate a draft");
@@ -241,7 +244,10 @@ function DocumentWorkspace({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ voiceProfileId: id || null }),
       });
-      if (!response.ok) throw new Error("Could not update the voice profile");
+      if (!response.ok)
+        throw new Error(
+          apiErrorMessage(await response.json(), "Could not update the voice profile"),
+        );
       setVoiceId(id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not update voice");
@@ -261,7 +267,7 @@ function DocumentWorkspace({
         body: JSON.stringify({ baseRevision }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Writing checks are unavailable");
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Writing checks are unavailable"));
       setChecks(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Writing checks failed");

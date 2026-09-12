@@ -27,6 +27,7 @@ let revision: number;
 let failSave: boolean;
 let delayedProposal: ((response: Response) => void) | null;
 let delayProposal: boolean;
+let draftFailure: boolean;
 let putCount: number;
 let acceptCount: number;
 let status: string;
@@ -54,6 +55,7 @@ beforeEach(() => {
   failSave = false;
   delayedProposal = null;
   delayProposal = false;
+  draftFailure = false;
   putCount = 0;
   acceptCount = 0;
   status = "open";
@@ -100,6 +102,14 @@ beforeEach(() => {
         return response({ review, items: [] }, 201);
       }
       if (url.endsWith("/ai/draft")) {
+        if (draftFailure)
+          return response(
+            {
+              error: "The AI returned an incomplete draft.",
+              requestId: "8375b3ba-4729-42e1-98ce-b6512454585c",
+            },
+            502,
+          );
         expect(JSON.parse(init?.body as string).baseRevision).toBe(revision);
         if (delayProposal)
           return new Promise<Response>((resolve) => {
@@ -278,4 +288,18 @@ it("renames a document without saving content or advancing its revision", async 
   expect(saved).toBe("Original draft");
   expect(revision).toBe(0);
   expect(putCount).toBe(0);
+});
+
+it("shows the diagnostic reference on a failed draft while preserving text and instructions", async () => {
+  const editor = await load();
+  draftFailure = true;
+  fireEvent.click(screen.getByRole("button", { name: "Write with AI" }));
+  const prompt = screen.getByRole("textbox", { name: "What would you like to write?" });
+  fireEvent.change(prompt, { target: { value: "Expand the introduction" } });
+  fireEvent.click(screen.getByRole("button", { name: "Generate draft" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Reference: 8375b3ba-4729-42e1-98ce-b6512454585c",
+  );
+  expect(editor).toHaveValue("Original draft");
+  expect(prompt).toHaveValue("Expand the introduction");
 });
