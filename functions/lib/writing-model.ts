@@ -1,4 +1,4 @@
-import { callClaudeAPI } from "./pipeline";
+import { callClaudeAPI, parseRevisionResponse } from "./pipeline";
 import { RequestError } from "./revisions";
 import type { Env } from "./types";
 
@@ -45,5 +45,27 @@ export async function callWritingModel(
     return text;
   } catch {
     throw new RequestError("AI writing could not finish. Please try again in a moment.", 503);
+  }
+}
+
+/** A malformed completion gets one fresh attempt; neither attempt writes document content. */
+export async function generateWritingRevision(env: Env, request: Request, prompt: string) {
+  for (let attempt = 0; ; attempt++) {
+    const raw = await callWritingModel(
+      env,
+      request,
+      attempt === 0
+        ? prompt
+        : `${prompt}
+
+Output reminder: return the complete document between REVISED_DOCUMENT_START and REVISED_DOCUMENT_END on separate lines, then valid JSON between CHANGE_SUMMARY_START and CHANGE_SUMMARY_END. Include both closing markers.`,
+      8192,
+    );
+    try {
+      return parseRevisionResponse(raw);
+    } catch (error) {
+      if (!(error instanceof RequestError) || error.status !== 502 || attempt >= 1) throw error;
+      console.warn("Retrying AI writing after an invalid completion format.");
+    }
   }
 }

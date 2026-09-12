@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { onRequest } from "../../api/[[route]]";
 import { handleAcceptCandidate } from "../candidates";
 import { handleGenerateDraft } from "../drafting";
-import { callClaudeAPI } from "../pipeline";
+import { callClaudeAPI, parseRevisionResponse } from "../pipeline";
 import { saveRevision } from "../revisions";
 import type { Document } from "../types";
 import { callWritingModel, WRITING_MODEL } from "../writing-model";
@@ -119,4 +120,58 @@ it("normalizes structured Workers AI review output for the review parser", async
   expect(JSON.parse(await callWritingModel(db.env, request({}), "Review this document"))).toEqual(
     review,
   );
+});
+
+it("accepts a complete revision with a fenced JSON summary", () => {
+  const fenced = raw
+    .replace("CHANGE_SUMMARY_START\n", "CHANGE_SUMMARY_START\n```json\n")
+    .replace("\nCHANGE_SUMMARY_END", "\n```\nCHANGE_SUMMARY_END");
+  expect(parseRevisionResponse(fenced).revisedDocument).toContain("A new draft");
+});
+
+it("retries malformed output once and returns the complete replacement proposal", async () => {
+  run.mockResolvedValueOnce({ response: "REVISED_DOCUMENT_START\nunfinished" });
+  const response = await handleGenerateDraft(
+    db.env,
+    request({ prompt: "Write a letter", baseRevision: 0 }),
+    "project",
+    "document",
+    "owner",
+  );
+  expect(response.status).toBe(201);
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(db.env.CONTENT_BUCKET.put).not.toHaveBeenCalled();
+});
+
+it.each([
+  "REVISED_DOCUMENT_START\nunfinished",
+  raw.replace('{"changes":[],"overallSummary":"Wrote an introduction"}', "null"),
+  raw.replace('{"changes":[],"overallSummary":"Wrote an introduction"}', "not valid JSON"),
+])("returns an actionable HTTP error after repeated invalid output without changing the document", async (invalid) => {
+  run.mockResolvedValue({ response: invalid });
+  db.sqlite.exec(
+    "INSERT INTO sessions (id, user_id, expires_at) VALUES ('test-session', 'owner', '2099-01-01')",
+  );
+  const req = new Request("https://example.test/api/projects/project/documents/document/ai/draft", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: "draftwell-session=test-session" },
+    body: JSON.stringify({ prompt: "Write a letter", baseRevision: 0 }),
+  });
+  const context = {
+    request: req,
+    env: db.env,
+    params: { route: ["projects", "project", "documents", "document", "ai", "draft"] },
+  } as unknown as Parameters<typeof onRequest>[0];
+  const response = await onRequest(context);
+  expect(response.status).toBe(502);
+  expect((await response.json()).error).toContain("Your document has not changed");
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(db.env.CONTENT_BUCKET.put).not.toHaveBeenCalled();
+  expect(db.sqlite.prepare("SELECT COUNT(*) AS count FROM revision_candidates").get()?.count).toBe(
+    0,
+  );
+  expect(
+    db.sqlite.prepare("SELECT current_revision FROM documents WHERE id = 'document'").get()
+      ?.current_revision,
+  ).toBe(0);
 });

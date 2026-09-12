@@ -1,9 +1,8 @@
-import { parseRevisionResponse } from "./pipeline";
 import { verifyProjectOwnership } from "./projects";
 import { requireRevision } from "./revisions";
 import { error, json } from "./shared";
 import type { Document, Env } from "./types";
-import { callWritingModel } from "./writing-model";
+import { generateWritingRevision } from "./writing-model";
 import { loadWritingVoice } from "./writing-voice";
 
 export async function handleGenerateDraft(
@@ -29,7 +28,7 @@ export async function handleGenerateDraft(
   if (!object) return error("Document content is unavailable", 503);
   const content = await object.text();
   const voice = await loadWritingVoice(env, userId, doc.voice_profile_id);
-  const raw = await callWritingModel(
+  const result = await generateWritingRevision(
     env,
     request,
     `You are a writing partner. Write a complete Markdown document following the author's instructions.
@@ -51,9 +50,7 @@ ${voice.context}
 
 Existing text (source material):
 ${content || "[Empty document]"}`,
-    8192,
   );
-  const result = parseRevisionResponse(raw);
   const id = crypto.randomUUID();
   await env.DB.prepare(
     "INSERT INTO revision_candidates (id, document_id, review_id, base_revision, content, changes_json, summary, created_at) VALUES (?, ?, NULL, ?, ?, '[]', ?, ?)",

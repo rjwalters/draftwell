@@ -1,3 +1,5 @@
+import { RequestError } from "./revisions";
+
 /**
  * Token estimation, revision prompts, and Claude API client
  * for the AI review pipeline.
@@ -88,10 +90,36 @@ export function parseRevisionResponse(raw: string): RevisionResult {
   const summaryMatch = raw.match(/CHANGE_SUMMARY_START\s*\n([\s\S]*?)\nCHANGE_SUMMARY_END/);
 
   if (!docMatch || !summaryMatch || !docMatch[1].trim())
-    throw new Error("The model returned an incomplete revision. No document was changed.");
-  const parsed = JSON.parse(summaryMatch[1].trim());
+    throw new RequestError(
+      "The AI returned an incomplete draft. Try requesting a shorter draft. Your document has not changed.",
+      502,
+    );
+  let parsed: unknown;
+  try {
+    // Models sometimes wrap the requested JSON in a Markdown code fence.
+    const summary = summaryMatch[1].trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i, "$1");
+    parsed = JSON.parse(summary);
+  } catch {
+    throw new RequestError(
+      "The AI returned an invalid change summary. Please try again. Your document has not changed.",
+      502,
+    );
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !("changes" in parsed) ||
+    !("overallSummary" in parsed)
+  )
+    throw new RequestError(
+      "The AI returned an invalid change summary. Please try again. Your document has not changed.",
+      502,
+    );
   if (!Array.isArray(parsed.changes) || typeof parsed.overallSummary !== "string")
-    throw new Error("Invalid revision summary");
+    throw new RequestError(
+      "The AI returned an invalid change summary. Please try again. Your document has not changed.",
+      502,
+    );
   for (const change of parsed.changes) {
     if (
       !change ||
@@ -100,7 +128,10 @@ export function parseRevisionResponse(raw: string): RevisionResult {
       !["addressed", "partial", "not_addressed"].includes(change.status) ||
       typeof change.explanation !== "string"
     )
-      throw new Error("Invalid revision change");
+      throw new RequestError(
+        "The AI returned invalid change details. Please try again. Your document has not changed.",
+        502,
+      );
   }
   return {
     revisedDocument: docMatch[1].trim(),

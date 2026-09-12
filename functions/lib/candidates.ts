@@ -1,9 +1,9 @@
-import { buildRefinementPrompt, buildRevisionPrompt, parseRevisionResponse } from "./pipeline";
+import { buildRefinementPrompt, buildRevisionPrompt } from "./pipeline";
 import { verifyProjectOwnership } from "./projects";
 import { requireRevision, saveRevision } from "./revisions";
 import { error, json } from "./shared";
 import type { Document, Env } from "./types";
-import { callWritingModel } from "./writing-model";
+import { generateWritingRevision } from "./writing-model";
 import { loadWritingVoice } from "./writing-voice";
 
 interface Change {
@@ -79,8 +79,7 @@ export async function generateCandidate(
   if (!items.length) return json({ message: "All review items have been addressed." });
   const voice = await loadWritingVoice(env, userId, doc.voice_profile_id);
   const prompt = (refine ? buildRefinementPrompt : buildRevisionPrompt)(content, items);
-  const raw = await callWritingModel(env, request, `${prompt}\n\n${voice.context}`, 8192);
-  const result = parseRevisionResponse(raw);
+  const result = await generateWritingRevision(env, request, `${prompt}\n\n${voice.context}`);
   const changes: Change[] = result.changes.flatMap((change) => {
     const item = items[change.reviewItemIndex - 1];
     return item
