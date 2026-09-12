@@ -112,3 +112,11 @@ it("uses a configured Claude key and does not silently switch after provider err
   );
   expect(run).not.toHaveBeenCalled();
 });
+
+it("normalizes structured Workers AI review output for the review parser", async () => {
+  const review = { summary: "Clear and concise", items: [] };
+  run.mockResolvedValue({ response: review });
+  expect(JSON.parse(await callWritingModel(db.env, request({}), "Review this document"))).toEqual(
+    review,
+  );
+});

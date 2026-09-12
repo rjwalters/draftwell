@@ -31,15 +31,18 @@ export async function callWritingModel(
       messages: [{ role: "user", content: prompt }],
       max_tokens: maxTokens,
     });
-    if (
-      !result ||
-      typeof result !== "object" ||
-      !("response" in result) ||
-      typeof result.response !== "string" ||
-      !result.response.trim()
-    )
-      throw new Error("Empty model response");
-    return result.response;
+    if (!result || typeof result !== "object" || !("response" in result))
+      throw new Error("Missing model response");
+    // Workers AI can decode JSON completions into objects even without JSON mode.
+    const output: unknown = result.response;
+    const text =
+      typeof output === "string"
+        ? output
+        : output && typeof output === "object"
+          ? JSON.stringify(output)
+          : "";
+    if (!text.trim()) throw new Error("Empty model response");
+    return text;
   } catch {
     throw new RequestError("AI writing could not finish. Please try again in a moment.", 503);
   }
