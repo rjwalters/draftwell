@@ -1,0 +1,10 @@
+[project]
+name = "draftwell-anvil"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "anvil @ git+https://github.com/rjwalters/anvil.git@422a295da45b85d40aa628a01df9c6d2d88e300a",
+]
+
+[tool.uv]
+package = false

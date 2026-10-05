@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleLogin } from "../auth";
 import { handleGoogleAuth, handleGoogleCallback } from "../google-auth";
 import type { Env } from "../types";
+import { database } from "./database";
 
 const CLIENT_ID = "test-client-id.apps.googleusercontent.com";
 const CLIENT_SECRET = "test-client-secret";
@@ -206,6 +207,33 @@ describe("handleGoogleCallback", () => {
     expect(state.insertedUsers[0]).toContain("user@example.com");
   });
 
+  it("creates and signs in a passwordless user against the migrated database", async () => {
+    const db = database();
+    mockTokenEndpoint(defaultPayload());
+    try {
+      const res = await handleGoogleCallback(
+        makeEnv(db.env.DB),
+        callbackRequest({ state: STATE, cookieState: STATE }),
+      );
+      expect(res.status).toBe(302);
+      const user = db.sqlite
+        .prepare("SELECT id, password_hash FROM users WHERE email = ?")
+        .get("user@example.com");
+      expect(user?.password_hash).toBe("");
+      expect(
+        db.sqlite
+          .prepare("SELECT user_id FROM oauth_accounts WHERE provider_user_id = ?")
+          .get("google-sub-123")?.user_id,
+      ).toBe(user?.id);
+      expect(
+        db.sqlite.prepare("SELECT user_id FROM sessions WHERE user_id = ?").get(user?.id as string)
+          ?.user_id,
+      ).toBe(user?.id);
+    } finally {
+      db.close();
+    }
+  });
+
   it("logs into the existing account matched by Google sub (not email)", async () => {
     const { db, state } = makeDb({ oauthLink: { user_id: "existing-user-1" } });
     mockTokenEndpoint(defaultPayload());
@@ -297,9 +325,9 @@ describe("handleGoogleCallback", () => {
 
 describe("handleLogin — Google-only account guard", () => {
   it.each([
-    ["empty", ""],
-    ["null", null],
-  ])("returns 401 (not 500) when the account has a %s password_hash", async (_, passwordHash) => {
+    null,
+    "",
+  ])("returns 401 for a passwordless account with hash %s", async (passwordHash) => {
     const db = {
       prepare() {
         const stmt = {

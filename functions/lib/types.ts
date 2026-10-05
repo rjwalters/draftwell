@@ -10,6 +10,8 @@ export interface Env {
   // Google OAuth (optional — set via `wrangler secret put`). When unset, the
   // Google sign-in endpoints degrade gracefully instead of redirecting with an
   // empty client id.
+  ANVIL_URL?: string;
+  ANVIL_TOKEN?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
 }
@@ -52,6 +54,7 @@ export interface Project {
 }
 
 export interface Document {
+  voice_profile_id?: string | null;
   id: string;
   project_id: string;
   title: string;

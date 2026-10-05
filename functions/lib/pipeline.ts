@@ -1,3 +1,5 @@
+import { RequestError } from "./revisions";
+
 /**
  * Token estimation, revision prompts, and Claude API client
  * for the AI review pipeline.
@@ -87,31 +89,60 @@ export function parseRevisionResponse(raw: string): RevisionResult {
   const docMatch = raw.match(/REVISED_DOCUMENT_START\s*\n([\s\S]*?)\nREVISED_DOCUMENT_END/);
   const summaryMatch = raw.match(/CHANGE_SUMMARY_START\s*\n([\s\S]*?)\nCHANGE_SUMMARY_END/);
 
-  const revisedDocument = docMatch ? docMatch[1].trim() : raw.trim();
-  let changes: RevisionResult["changes"] = [];
-  let overallSummary = "Revision completed.";
-
-  if (summaryMatch) {
-    try {
-      const parsed = JSON.parse(summaryMatch[1].trim());
-      if (Array.isArray(parsed.changes)) {
-        changes = parsed.changes.map((c: Record<string, unknown>) => ({
-          reviewItemIndex: typeof c.reviewItemIndex === "number" ? c.reviewItemIndex : 0,
-          status: ["addressed", "partial", "not_addressed"].includes(c.status as string)
-            ? (c.status as "addressed" | "partial" | "not_addressed")
-            : "not_addressed",
-          explanation: typeof c.explanation === "string" ? c.explanation : "",
-        }));
-      }
-      if (typeof parsed.overallSummary === "string") {
-        overallSummary = parsed.overallSummary;
-      }
-    } catch {
-      // If JSON parsing fails, use defaults
-    }
+  if (!docMatch || !summaryMatch || !docMatch[1].trim())
+    throw new RequestError(
+      "The AI returned an incomplete draft. Try requesting a shorter draft. Your document has not changed.",
+      502,
+      "incomplete_output",
+    );
+  let parsed: unknown;
+  try {
+    // Models sometimes wrap the requested JSON in a Markdown code fence.
+    const summary = summaryMatch[1].trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i, "$1");
+    parsed = JSON.parse(summary);
+  } catch {
+    throw new RequestError(
+      "The AI returned an invalid change summary. Please try again. Your document has not changed.",
+      502,
+      "invalid_summary",
+    );
   }
-
-  return { revisedDocument, changes, overallSummary };
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !("changes" in parsed) ||
+    !("overallSummary" in parsed)
+  )
+    throw new RequestError(
+      "The AI returned an invalid change summary. Please try again. Your document has not changed.",
+      502,
+      "invalid_summary",
+    );
+  if (!Array.isArray(parsed.changes) || typeof parsed.overallSummary !== "string")
+    throw new RequestError(
+      "The AI returned an invalid change summary. Please try again. Your document has not changed.",
+      502,
+      "invalid_summary",
+    );
+  for (const change of parsed.changes) {
+    if (
+      !change ||
+      !Number.isSafeInteger(change.reviewItemIndex) ||
+      change.reviewItemIndex < 1 ||
+      !["addressed", "partial", "not_addressed"].includes(change.status) ||
+      typeof change.explanation !== "string"
+    )
+      throw new RequestError(
+        "The AI returned invalid change details. Please try again. Your document has not changed.",
+        502,
+        "invalid_changes",
+      );
+  }
+  return {
+    revisedDocument: docMatch[1].trim(),
+    changes: parsed.changes,
+    overallSummary: parsed.overallSummary,
+  };
 }
 
 /**

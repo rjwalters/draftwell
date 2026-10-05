@@ -1,0 +1,9 @@
+# Fill locally; do not put real secrets in this example.
+ANTHROPIC_API_KEY=
+AI_GATEWAY=
+AI_GATEWAY_TOKEN=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+# Optional local Anvil runner. Use the same nonempty token in its process.
+ANVIL_URL=http://127.0.0.1:8790
+ANVIL_TOKEN=

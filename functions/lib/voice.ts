@@ -146,13 +146,10 @@ export async function handleAnalyzeVoice(
 
   let profileDataRaw: string;
   try {
-    const aiResponse = await env.AI.run(
-      "@cf/meta/llama-3.1-70b-instruct" as BaseAiTextGenerationModels,
-      {
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 2048,
-      },
-    );
+    const aiResponse = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 2048,
+    });
 
     if (typeof aiResponse === "object" && aiResponse !== null && "response" in aiResponse) {
       profileDataRaw = (aiResponse as { response: string }).response;

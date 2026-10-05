@@ -1,4 +1,5 @@
 import { verifyProjectOwnership } from "./projects";
+import { requireRevision, saveRevision } from "./revisions";
 import { error, json } from "./shared";
 import type { Document, Env } from "./types";
 
@@ -12,7 +13,7 @@ export async function handleGetDocuments(
   }
 
   const { results } = await env.DB.prepare(
-    "SELECT id, project_id, title, current_revision, r2_key, created_at, updated_at FROM documents WHERE project_id = ? ORDER BY created_at DESC",
+    "SELECT id, project_id, title, voice_profile_id, current_revision, r2_key, created_at, updated_at FROM documents WHERE project_id = ? ORDER BY created_at DESC",
   )
     .bind(projectId)
     .all<Document>();
@@ -30,7 +31,7 @@ export async function handleGetDocument(
   }
 
   const doc = await env.DB.prepare(
-    "SELECT id, project_id, title, current_revision, r2_key, created_at, updated_at FROM documents WHERE id = ? AND project_id = ?",
+    "SELECT id, project_id, title, voice_profile_id, current_revision, r2_key, created_at, updated_at FROM documents WHERE id = ? AND project_id = ?",
   )
     .bind(docId, projectId)
     .first<Document>();
@@ -41,7 +42,8 @@ export async function handleGetDocument(
 
   // Fetch content from R2
   const object = await env.CONTENT_BUCKET.get(doc.r2_key);
-  const content = object ? await object.text() : "";
+  if (!object) return error("Document content is unavailable. Please try again.", 503);
+  const content = await object.text();
 
   return json({ document: doc, content });
 }
@@ -112,67 +114,64 @@ export async function handleUpdateDocument(
     return error("Project not found", 404);
   }
 
-  const existing = await env.DB.prepare(
-    "SELECT id, current_revision FROM documents WHERE id = ? AND project_id = ?",
-  )
+  const existing = await env.DB.prepare("SELECT * FROM documents WHERE id = ? AND project_id = ?")
     .bind(docId, projectId)
-    .first<{ id: string; current_revision: number }>();
-
-  if (!existing) {
-    return error("Document not found", 404);
-  }
-
-  const body = (await request.json()) as { content?: string; title?: string };
-
-  if (body.content === undefined && body.title === undefined) {
-    return error("No fields to update");
-  }
-
-  const now = new Date().toISOString();
-  const updates: string[] = [];
-  const values: (string | number | null)[] = [];
-
-  if (body.content !== undefined) {
-    const newRevision = existing.current_revision + 1;
-    const newR2Key = `users/${userId}/projects/${projectId}/documents/${docId}/rev_${newRevision}.md`;
-
-    // Store new content in R2
-    await env.CONTENT_BUCKET.put(newR2Key, body.content);
-
-    // Create new revision record
-    const revisionId = crypto.randomUUID();
-    await env.DB.prepare(
-      "INSERT INTO revisions (id, document_id, revision_number, r2_key, created_at) VALUES (?, ?, ?, ?, ?)",
-    )
-      .bind(revisionId, docId, newRevision, newR2Key, now)
-      .run();
-
-    updates.push("current_revision = ?");
-    values.push(newRevision);
-    updates.push("r2_key = ?");
-    values.push(newR2Key);
-  }
-
-  if (body.title !== undefined) {
-    updates.push("title = ?");
-    values.push(body.title);
-  }
-
-  updates.push("updated_at = ?");
-  values.push(now);
-  values.push(docId);
-  values.push(projectId);
-
-  await env.DB.prepare(`UPDATE documents SET ${updates.join(", ")} WHERE id = ? AND project_id = ?`)
-    .bind(...values)
-    .run();
-
-  const doc = await env.DB.prepare(
-    "SELECT id, project_id, title, current_revision, r2_key, created_at, updated_at FROM documents WHERE id = ?",
-  )
-    .bind(docId)
     .first<Document>();
-
+  if (!existing) return error("Document not found", 404);
+  const body = (await request.json()) as {
+    content?: unknown;
+    title?: unknown;
+    baseRevision?: unknown;
+    voiceProfileId?: unknown;
+  };
+  if (body.content === undefined && body.title === undefined && body.voiceProfileId === undefined)
+    return error("No fields to update");
+  if (body.content !== undefined && typeof body.content !== "string")
+    return error("Content must be text");
+  if (body.title !== undefined && (typeof body.title !== "string" || !body.title.trim()))
+    return error("Title must be nonempty text");
+  if (body.voiceProfileId !== undefined && body.voiceProfileId !== null) {
+    if (typeof body.voiceProfileId !== "string") return error("Invalid voice profile");
+    const voice = await env.DB.prepare("SELECT id FROM voice_profiles WHERE id = ? AND user_id = ?")
+      .bind(body.voiceProfileId, userId)
+      .first();
+    if (!voice) return error("Voice profile not found", 404);
+  }
+  // Content saves and metadata changes are separate operations so a profile/title
+  // update cannot partially succeed after a failed content compare-and-swap.
+  if (typeof body.content === "string") {
+    if (body.title !== undefined || body.voiceProfileId !== undefined)
+      return error("Save content separately from document settings");
+    const baseRevision = requireRevision(body.baseRevision);
+    const saved = await saveRevision(env, existing, userId, body.content, baseRevision);
+    return json({
+      document: {
+        ...existing,
+        current_revision: saved.revision,
+        r2_key: saved.r2Key,
+        updated_at: saved.updatedAt,
+      },
+    });
+  } else {
+    const updates: string[] = ["updated_at = ?"];
+    const values: (string | null)[] = [new Date().toISOString()];
+    if (typeof body.title === "string") {
+      updates.push("title = ?");
+      values.push(body.title);
+    }
+    if (body.voiceProfileId !== undefined) {
+      updates.push("voice_profile_id = ?");
+      values.push(body.voiceProfileId as string | null);
+    }
+    await env.DB.prepare(
+      `UPDATE documents SET ${updates.join(", ")} WHERE id = ? AND project_id = ?`,
+    )
+      .bind(...values, docId, projectId)
+      .run();
+  }
+  const doc = await env.DB.prepare("SELECT * FROM documents WHERE id = ? AND project_id = ?")
+    .bind(docId, projectId)
+    .first<Document>();
   return json({ document: doc });
 }
 

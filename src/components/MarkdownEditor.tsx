@@ -5,10 +5,11 @@ const Editor = lazy(() => import("@monaco-editor/react").then((mod) => ({ defaul
 
 interface MarkdownEditorProps {
   value: string;
+  readOnly?: boolean;
   onChange: (value: string) => void;
 }
 
-export function MarkdownEditor({ value, onChange }: MarkdownEditorProps) {
+export function MarkdownEditor({ value, onChange, readOnly = false }: MarkdownEditorProps) {
   const { resolvedTheme } = useTheme();
 
   return (
@@ -25,6 +26,7 @@ export function MarkdownEditor({ value, onChange }: MarkdownEditorProps) {
         value={value}
         onChange={(v) => onChange(v ?? "")}
         options={{
+          readOnly,
           wordWrap: "on",
           minimap: { enabled: false },
           fontSize: 14,

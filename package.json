@@ -7,7 +7,8 @@
   "packageManager": "pnpm@12.9.1",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "diagnostics": "node scripts/diagnostics.mjs",
+    "build": "pnpm run typecheck && vite build",
     "preview": "vite preview",
     "deploy": "wrangler pages deploy dist",
     "db:migrate": "wrangler d1 migrations apply draftwell-db --local",
@@ -18,9 +19,13 @@
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
-    "check:ci": "tsc --noEmit && biome check . && vitest run",
-    "check:all": "tsc --noEmit && biome check . && vitest run",
-    "worktree:return": "./.loom/scripts/worktree-return.sh"
+    "check:ci": "pnpm run typecheck && biome check . && vitest run && pnpm run test:panel",
+    "check:all": "pnpm run check:ci && pnpm run test:anvil",
+    "worktree:return": "./.loom/scripts/worktree-return.sh",
+    "dev:api": "wrangler pages dev dist --port 8788",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.functions.json && pnpm -r --filter './packages/*' run check",
+    "test:panel": "pnpm --filter @draftwell/review-panel run build && pnpm --filter @draftwell/review-panel test",
+    "test:anvil": "uv run --project services/anvil --frozen python -m unittest discover -s services/anvil -v"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
@@ -29,6 +34,7 @@
     "@tailwindcss/typography": "^0.5.19",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "diff": "^9.0.0",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.468.0",
     "marked": "^18.0.0",
@@ -56,5 +62,8 @@
     "vite": "^6.0.6",
     "vitest": "^2.1.8",
     "wrangler": "^3.99.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }
