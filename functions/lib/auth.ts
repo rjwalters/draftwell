@@ -123,7 +123,8 @@ export async function handleLogin(env: Env, request: Request): Promise<Response>
     return error("Invalid email or password", 401);
   }
 
-  // Google-only accounts have a null password_hash — password login must fail
+  // Google-only accounts have an empty (or, on databases migrated with the
+  // original 0003_google_oauth.sql, null) password_hash — password login must fail
   // cleanly (401) rather than crashing verifyPassword (500).
   if (!user.password_hash) {
     return error("Invalid email or password", 401);
