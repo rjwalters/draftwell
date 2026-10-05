@@ -1,0 +1,5 @@
+# Installed Loom files with intentional per-repo customizations.
+# resync-installed.sh reports these as `skipped` and never overwrites them.
+
+# Excludes the Repo Skills paths (commands/repo, skills/repo) from Biome.
+.claude/biome.jsonc
