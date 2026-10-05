@@ -4,6 +4,7 @@
   "description": "Iterative document refinement with AI-powered critical review",
   "type": "module",
   "private": true,
+  "packageManager": "pnpm@12.9.1",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
