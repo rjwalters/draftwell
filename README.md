@@ -67,7 +67,7 @@ These remain as structured descriptions in source, with optional rendering to ac
 │                      Web Application                        │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
 │  │   Monaco    │  │   Preview   │  │   Review Panel      │ │
-│  │   Editor    │  │  (Live PDF) │  │   - Issue tracking  │ │
+│  │   Editor    │  │ +PDF export │  │   - Issue tracking  │ │
 │  │             │  │             │  │   - Status updates  │ │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
@@ -76,40 +76,41 @@ These remain as structured descriptions in source, with optional rendering to ac
 ┌─────────────────────────────────────────────────────────────┐
 │                   Cloudflare Workers                         │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────┐ │
-│  │   Auth   │  │  Storage │  │   PDF    │  │ AI Pipeline │ │
+│  │   Auth   │  │  Storage │  │  Voice   │  │ AI Pipeline │ │
 │  └──────────┘  └──────────┘  └──────────┘  └─────────────┘ │
 └─────────────────────────────────────────────────────────────┘
                             │
               ┌─────────────┼─────────────┐
               ▼             ▼             ▼
          ┌────────┐   ┌──────────┐   ┌──────────┐
-         │   R2   │   │  Claude  │   │  Typst   │
-         │Storage │   │   API    │   │  (PDF)   │
+         │ D1/R2  │   │  Claude  │   │ Workers  │
+         │Storage │   │   API    │   │    AI    │
          └────────┘   └──────────┘   └──────────┘
 ```
 
 ### Stack
 
-- **Frontend**: Monaco editor, React, Tailwind
-- **Backend**: Cloudflare Workers
-- **Storage**: Cloudflare R2 (documents, revisions, assets)
-- **Auth**: Cloudflare Access or OAuth
-- **AI**: Claude API (review, revision, refinement)
-- **PDF**: Typst (fast, modern LaTeX alternative with WASM support)
+- **Frontend**: React 19, Vite, Tailwind, Monaco editor
+- **Backend**: Cloudflare Pages Functions (`functions/`)
+- **Storage**: Cloudflare D1 (users, projects, documents, reviews, scores), R2 (document and revision content), KV (rate limiting)
+- **Auth**: Email/password sessions plus Google OAuth sign-in
+- **AI**: Claude API (review, revision, refinement, scoring) and Workers AI, optionally routed through Cloudflare AI Gateway
+- **PDF**: Client-side export with jsPDF
 
 ## MVP Scope
 
 ### Included
 
-- [ ] Monaco editor with markdown + figure/image syntax highlighting
-- [ ] Project/document management (single user)
-- [ ] Authentication
-- [ ] R2 storage with version history
-- [ ] Critical review generation
-- [ ] Revision generation with change tracking
-- [ ] Refinement loop for partial issues
-- [ ] Basic styleguide with anti-trope validation
-- [ ] PDF export
+- [x] Monaco markdown editor with live preview and auto-save
+- [ ] Figure/image syntax highlighting in the editor
+- [x] Project/document management (single user)
+- [x] Authentication
+- [x] R2 storage with version history
+- [x] Critical review generation
+- [x] Revision generation with change tracking
+- [x] Refinement loop for partial issues
+- [x] Basic styleguide with anti-trope validation
+- [x] PDF export
 
 ### Deferred
 
@@ -127,25 +128,32 @@ These remain as structured descriptions in source, with optional rendering to ac
 # Install dependencies
 pnpm install
 
+# Apply D1 migrations locally
+pnpm db:migrate
+
 # Run development server
 pnpm dev
 
-# Deploy to Cloudflare
-pnpm deploy
+# Lint, typecheck, and test
+pnpm check:all
+
+# Deploy to Cloudflare Pages (`pnpm deploy` is a pnpm built-in, so use `run`)
+pnpm run deploy
 ```
 
 ## Project Structure
 
 ```
 draftwell/
-├── apps/
-│   └── web/              # Frontend application
+├── src/                  # React frontend (pages, components, hooks)
+├── functions/
+│   ├── api/              # Pages Functions API router ([[route]].ts)
+│   └── lib/              # Auth, projects, documents, AI pipeline, voice profiles
+├── migrations/           # D1 schema migrations
 ├── packages/
-│   ├── api/              # Cloudflare Workers
-│   ├── styleguide/       # Styleguide validation
-│   └── shared/           # Shared types and utilities
-├── docs/                 # Documentation
-└── examples/             # Example documents and styleguides
+│   ├── styleguide/       # Anti-slop styleguide and language discipline rules
+│   └── review-panel/     # Multi-persona review, scoring, and Elo comparison
+└── public/               # Static assets
 ```
 
 ## License
