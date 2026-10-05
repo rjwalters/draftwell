@@ -1,6 +1,6 @@
 # Work Plan
 
-Updated 2026-09-11. Implemented on `improve/writing-workflow`. The branch includes GitHub main and preserves the original local settings commit.
+Updated 2026-10-05. Implemented on `improve/writing-workflow` and merged to `main` in #84; production has run this work since 2026-09-11.
 
 | Priority | Work | Status |
 |---|---|---|
