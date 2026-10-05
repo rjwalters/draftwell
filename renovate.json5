@@ -31,7 +31,7 @@
   // Never auto-merge. Agents review, humans merge.
   "automerge": false,
 
-  // Create PRs as drafts — consistent with AGENTS.md PR policy
+  // Create PRs as drafts
   "draftPR": true,
 
   // --- Schedule ---
@@ -64,11 +64,25 @@
   "prConcurrentLimit": 5,
 
   // Add release notes and changelogs to PR body for agent review
-  "fetchReleaseNotes": true,
+  "fetchChangeLogs": "pr",
 
   // --- Package grouping ---
 
   "packageRules": [
+    // Group all non-major npm (pnpm) dependency updates into one PR — the app,
+    // packages/review-panel, and packages/styleguide share one pnpm lockfile
+    {
+      "groupName": "npm minor/patch dependencies",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+
+    // npm major updates get individual PRs
+    {
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"]
+    },
+
     // Group all non-major Python dependency updates into one PR
     {
       "groupName": "python minor/patch dependencies",
@@ -83,7 +97,7 @@
     },
 
     // Group all GitHub Actions SHA updates into one PR
-    // AGENTS.md mandates SHA pinning with inline version comments (# vX.Y.Z)
+    // Workflows pin actions by SHA with inline version comments (# vX.Y.Z)
     // Renovate preserves these comments natively when updating digests
     {
       "groupName": "github-actions",
@@ -105,11 +119,19 @@
 
   // --- Ignored paths ---
 
-  // Don't touch vendored dependencies (submodules)
+  // Setting ignorePaths replaces Renovate's defaults, so restate the ones that
+  // matter (node_modules, vendored code, test fixtures) and add the
+  // tool-managed trees (Loom, Claude Code, agent skills).
   "ignorePaths": [
-    "vendor/**",
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/__tests__/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/__fixtures__/**",
     ".claude/**",
-    "infra/pulumi/**"
+    ".loom/**",
+    ".agents/**"
   ],
 
   // --- Vulnerability alerts ---
