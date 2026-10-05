@@ -39,12 +39,39 @@
 #   4. Control: unchanged behavior for a genuine linked worktree — both the
 #      loom-managed (auto-removed) and user-owned (generic "lacks sentinel"
 #      advice, `git worktree remove` suggestion intact) cases.
+#   5. #5015 extension: the two-step advice above was previously the END of
+#      the story even when the tip-match safety check (already computed for
+#      the force-delete path) provably held. Now, when the primary
+#      checkout's tree is also clean, merge-pr.sh performs the checkout+
+#      delete itself rather than just printing instructions; a dirty tree
+#      keeps exactly the old print-only behavior. See also
+#      test-merge-pr-local-branch-cleanup.sh cases (g)-(j) for the
+#      opt-out-flag and active-stash edge cases.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MERGE_PR="$SCRIPTS_DIR/merge-pr.sh"
+
+# #8191: _maybe_delete_local_branch (called directly and via
+# _remove_loom_worktree) now delegates to `loom-daemon merge-pr delete-branch`.
+# Pin the binary built from this tree so a stale installed daemon cannot answer
+# instead — it would warn-and-keep every branch and fail these cases for the
+# wrong reason.
+#
+# #8191 slice: the porcelain lookups this suite extracts (_primary_worktree_path
+# / _is_primary_worktree_path / _worktree_branch_for / _find_worktree_by_branch)
+# now delegate to `loom-daemon merge-pr worktree-*`, so the LEAF verbs are
+# checked too — a binary with only the `merge-pr` group predates this slice and
+# would make every lookup fail, which the #3710 guard turns into "refuse to
+# clean up anything at all": a whole-suite failure that reads as broken logic
+# rather than as one stale binary.
+# shellcheck source=lib/require-daemon-bin.sh
+source "$SCRIPT_DIR/lib/require-daemon-bin.sh"
+loom_test_require_daemon_bin "$SCRIPTS_DIR" "merge-pr" \
+    "merge-pr worktree-primary" "merge-pr worktree-branch-for" \
+    "merge-pr worktree-find-by-branch"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -56,6 +83,19 @@ TESTS_FAILED=0
 
 pass() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_PASSED=$((TESTS_PASSED + 1)); echo -e "  ${GREEN}PASS${NC}: $1"; }
 fail() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_FAILED=$((TESTS_FAILED + 1)); echo -e "  ${RED}FAIL${NC}: $1"; }
+
+# An assertion that CANNOT survive the port to Rust, retired under the
+# three-part test in defaults/docs/verification-recipes.md §6. Printed, not
+# deleted: a reader must be able to see what was removed, why, and what proves
+# the property now. Counted as run so the totals stay honest.
+YELLOW='\033[0;33m'
+retired() { # <what> <property> <why-structural> <successor>
+    TESTS_RUN=$((TESTS_RUN + 1)); TESTS_PASSED=$((TESTS_PASSED + 1))
+    echo -e "  ${YELLOW}RETIRED${NC}: $1"
+    echo "      property:   $2"
+    echo "      structural: $3"
+    echo "      successor:  $4"
+}
 
 assert_grep() {
     local pattern="$1" file="$2" msg="$3"
@@ -73,10 +113,16 @@ assert_grep 'if _is_primary_worktree_path "\$DISCOVERED_WT"; then' "$MERGE_PR" \
     "discovery-fallback checks whether the discovered worktree is the primary checkout"
 assert_grep 'not a removable worktree' "$MERGE_PR" \
     "discovery-fallback reports the primary checkout as not removable"
-assert_grep 'checkout_loc="\$\(_find_worktree_by_branch "\$branch"\)"' "$MERGE_PR" \
-    "_maybe_delete_local_branch resolves the branch's checkout location"
-assert_grep "git -C '\\\$checkout_loc' checkout \\\$default_label" "$MERGE_PR" \
-    "_maybe_delete_local_branch prints the two-step checkout+delete advice"
+retired \
+    "_maybe_delete_local_branch resolves the branch's checkout location" \
+    "a checked-out refusal is attributed to WHERE the branch is checked out, so the primary checkout gets primary-specific advice (#4171)" \
+    "#8191: the refusal handling left the shell. _maybe_delete_local_branch calls 'loom-daemon merge-pr delete-branch', and the location lookup is worktree_cli::branch_delete::handle_checked_out's find_worktree_by_branch — there is no checkout_loc assignment in merge-pr.sh to grep for" \
+    "Test 3 below, which runs the real function against a real primary checkout and requires the primary-specific message, plus Test 5a/5b"
+retired \
+    "_maybe_delete_local_branch prints the two-step checkout+delete advice" \
+    "the primary-checkout refusal prints the exact 'git -C <dir> checkout <default> && git -C <dir> branch -D <branch>' remediation" \
+    "#8191: that message is now worded by worktree_cli::branch_delete (Rust) and replayed by the shell from a WARNING<TAB>message line; merge-pr.sh never spells '\$checkout_loc' or '\$default_label' again" \
+    "Test 3 below, which asserts the replayed output contains 'checkout main' and 'branch -D <branch>' behaviourally — stronger than a grep, since it proves the text reaches the operator"
 
 # --- Extract the ACTUAL function bodies from the live source (no drift) ---
 extract_fn() {
@@ -94,10 +140,21 @@ warning() { echo "WARN: $*"; }
 success() { echo "OK: $*"; }
 error()   { echo "ERROR: $*" >&2; return 1; }
 
+# #8191 slice: the porcelain lookups below shell out through _mp_worktree, so it
+# is extracted with them — without it they die with "_mp_worktree: command not
+# found" under `set -e`.
+eval "$(extract_fn _mp_worktree               "$MERGE_PR")"
 eval "$(extract_fn _primary_worktree_path     "$MERGE_PR")"
 eval "$(extract_fn _is_primary_worktree_path  "$MERGE_PR")"
 eval "$(extract_fn _worktree_branch_for       "$MERGE_PR")"
 eval "$(extract_fn _find_worktree_by_branch   "$MERGE_PR")"
+# #7812: _maybe_delete_local_branch's `-d` -> `-D` safety check is now the
+# shared `branch_landed` primitive — a real library, so it is SOURCED here
+# rather than extracted. Offline: these cases exercise merge-pr.sh's local
+# branch logic, not the forge rung, and the suite must stay hermetic.
+export LOOM_BRANCH_LANDED_OFFLINE=1
+# shellcheck source=../lib/branch-landed.sh
+source "$(dirname "$MERGE_PR")/lib/branch-landed.sh"
 eval "$(extract_fn _maybe_delete_local_branch "$MERGE_PR")"
 eval "$(extract_fn _remove_loom_worktree      "$MERGE_PR")"
 
@@ -118,12 +175,24 @@ git -C "$PRIMARY" config user.name "Test"
 echo "hello" > "$PRIMARY/README.md"
 git -C "$PRIMARY" add -A
 git -C "$PRIMARY" commit -q -m "initial"
+# Normalize the initial branch name so the test does not depend on the
+# runner's init.defaultBranch git config — _maybe_delete_local_branch()'s
+# auto-cleanup does `git checkout "$DEFAULT_BRANCH_NAME"` (main), which would
+# otherwise fail on runners where `git init` does not name the branch `main`.
+git -C "$PRIMARY" branch -M main
 
 # The merged PR's branch, checked out directly in the primary — NO
 # .loom-managed sentinel here (this is the real-world case: the primary
 # checkout is never Loom-managed).
 PR_BRANCH="config/enable-collision-detection"
 git -C "$PRIMARY" checkout -q -b "$PR_BRANCH"
+# One commit that never reaches main, so the branch is genuinely UNLANDED
+# (#7812): the `-d` -> `-D` upgrade is keyed on whether the default branch
+# already contains the work, not on whether the caller passed a head SHA, so a
+# branch parked exactly at main's tip would now be force-deletable and this
+# test would exercise the auto-cleanup path instead of the advice path.
+echo "collision detection" >> "$PRIMARY/README.md"
+git -C "$PRIMARY" commit -q -am "unlanded work on the PR branch"
 
 # shellcheck disable=SC2034
 REPO_ROOT="$PRIMARY"
@@ -238,6 +307,68 @@ else
         fail "user-owned worktree advice regressed: $user_sim_out"
     fi
 fi
+
+# --- Test 5: primary-checkout auto-cleanup when it is PROVABLY safe (#5015) ---
+#
+# Test 3 above only exercises the "print manual instructions" path because its
+# branch is genuinely unlanded, so the `-d` -> `-D` upgrade never engages
+# (#7812). This distinguishes that case from the
+# genuinely-safe one: a clean tree AND a tip matching the merged PR head SHA
+# completes the cleanup automatically instead of just printing advice. The
+# companion dirty-tree control confirms the two-step advice remains unchanged
+# whenever the tree is NOT provably clean.
+echo ""
+echo "Test 5: primary-checkout auto-cleanup when provably safe (#5015)"
+
+# shellcheck disable=SC2034
+CLEANUP_PRIMARY_CHECKOUT=true
+
+# (a) clean tree + tip matches the merged PR head SHA -> auto checkout+delete.
+git -C "$PRIMARY" checkout -q -b feature/issue-501
+echo "clean work" >> "$PRIMARY/README.md"
+git -C "$PRIMARY" commit -q -am "issue 501 work"
+CLEAN_TIP_SHA="$(git -C "$PRIMARY" rev-parse feature/issue-501)"
+
+set +e
+clean_out="$(_maybe_delete_local_branch "feature/issue-501" "$CLEAN_TIP_SHA" 2>&1)"
+clean_rc=$?
+set -e
+
+if [[ $clean_rc -eq 0 ]] \
+   && [[ "$clean_out" == *"deleted"* ]] \
+   && [[ "$clean_out" == *"safe force-delete"* ]] \
+   && [[ "$(git -C "$PRIMARY" branch --show-current)" == "main" ]] \
+   && ! git -C "$PRIMARY" show-ref --verify --quiet refs/heads/feature/issue-501; then
+    pass "(5a) clean tree + tip-matching head SHA auto-cleans the branch instead of printing advice"
+else
+    fail "(5a) expected auto-cleanup; rc=$clean_rc, out: $clean_out, branch: $(git -C "$PRIMARY" branch --show-current)"
+fi
+
+# (b) control: same setup but a DIRTY tree -> unchanged manual-instructions
+# behavior (this is the "leave current behavior unchanged when the tree is
+# dirty" acceptance criterion).
+git -C "$PRIMARY" checkout -q -b feature/issue-502
+echo "clean work" >> "$PRIMARY/README.md"
+git -C "$PRIMARY" commit -q -am "issue 502 work"
+DIRTY_TIP_SHA="$(git -C "$PRIMARY" rev-parse feature/issue-502)"
+echo "uncommitted" >> "$PRIMARY/README.md"
+
+set +e
+dirty_out="$(_maybe_delete_local_branch "feature/issue-502" "$DIRTY_TIP_SHA" 2>&1)"
+dirty_rc=$?
+set -e
+
+if [[ $dirty_rc -eq 0 ]] \
+   && [[ "$dirty_out" == *"checked out in the primary repository checkout"* ]] \
+   && [[ "$dirty_out" == *"checkout main"* ]] \
+   && [[ "$dirty_out" == *"branch -D feature/issue-502"* ]] \
+   && [[ "$(git -C "$PRIMARY" branch --show-current)" == "feature/issue-502" ]] \
+   && git -C "$PRIMARY" show-ref --verify --quiet refs/heads/feature/issue-502; then
+    pass "(5b) a dirty tree keeps the manual-instructions behavior unchanged, HEAD untouched"
+else
+    fail "(5b) expected unchanged manual-instructions behavior on a dirty tree; rc=$dirty_rc, out: $dirty_out"
+fi
+git -C "$PRIMARY" checkout -q -- README.md
 
 # --- Summary ---
 echo ""

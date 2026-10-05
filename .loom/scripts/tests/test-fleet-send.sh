@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
-# test-fleet-send.sh — Tests for the safehouse Bash fleet-comms client
+# test-fleet-send.sh — Tests for the safehouse fleet-comms client
 # (issue #4199, phase 2 of #4196 / #3997).
 #
-# fleet-send.sh is the Bash fallback that lifecycle role subagents (Builder /
+# fleet-send.sh is the fallback that lifecycle role subagents (Builder /
 # Judge / Doctor) use to post to the safehouse room, since their tool allowlists
 # exclude the injected `safehouse_send` MCP tool. Its contract is HARD
 # degradation: never block or fail a role.
+#
+# Since issue #9517 (epic #7810) the implementation is the native
+# `loom-daemon fleet-send` subcommand and the script is a thin silent stub;
+# these assertions were written against the shell body and run UNCHANGED
+# against the port — the equivalence evidence. The only edits are the
+# daemon-bin pin below and two assertions that had pinned python's
+# `json.dumps` byte layout (`"to": "*"` with a space, `"op": "send"`) and now
+# parse the recorded JSON instead: the wire CONTRACT was always the parsed
+# shape, never the byte layout, and serde_json emits compact JSON.
 #
 # Covers:
 #   a. No SAFEHOUSED_SOCKET / SAFEHOUSE_PERSONA env ⇒ exit 0, zero output.
@@ -26,6 +35,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FLEET_SEND="$SCRIPTS_DIR/fleet-send.sh"
 PY="${LOOM_PYTHON:-python3}"
+
+# The suite's subject is now a stub over `loom-daemon fleet-send` (epic
+# #7810), so it pins the working-tree build — the same harness the other
+# native-port suites use — and fails LOUDLY when no binary with the
+# subcommand resolves. Silence is the stub's success contract; without this
+# pin a missing daemon would look exactly like the (a)/(b) degradation cases
+# and (c) would fail with a baffling empty record.
+# shellcheck source=lib/require-daemon-bin.sh
+source "$SCRIPT_DIR/lib/require-daemon-bin.sh"
+loom_test_require_daemon_bin "$SCRIPTS_DIR" "fleet-send"
+
+# Background-PID bookkeeping (#4773): the mock AF_UNIX server backgrounded by
+# start_mock() (below) is tracked here so the EXIT/INT/TERM trap can reap it
+# even if this suite is killed before an in-body `wait "$MOCK_PID"` runs.
+# shellcheck source=lib/bg-proc-trap.sh
+source "$SCRIPT_DIR/lib/bg-proc-trap.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -67,7 +92,15 @@ if ! command -v "$PY" >/dev/null 2>&1; then
 fi
 
 TMPDIR_TEST="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR_TEST"' EXIT
+# bg_proc_reap kills the mock server tracked via bg_proc_track in start_mock()
+# below (a backstop for a kill BEFORE the in-body `wait "$MOCK_PID"` runs);
+# EXIT/INT/TERM (not just EXIT, #4773) so a hard interruption of this suite
+# still reaps it. NOTE: a bare `trap CMD EXIT INT TERM` runs CMD on INT/TERM
+# but does NOT stop the script (only an EXIT-trap firing auto-exits) -- the
+# explicit `exit` below is required, else a SIGTERM'd suite would clean up
+# once and then keep running every remaining test case.
+trap 'bg_proc_reap; rm -rf "$TMPDIR_TEST"' EXIT
+trap 'bg_proc_reap; rm -rf "$TMPDIR_TEST"; exit 1' INT TERM
 
 # Mock AF_UNIX safehoused: accept one connection, reply ok to hello + send, and
 # record every received line to $2. Times out (writing an empty record) if no
@@ -135,6 +168,7 @@ start_mock() {
     local sock="$1" rec="$2"
     "$PY" "$MOCK_PY" "$sock" "$rec" &
     MOCK_PID=$!
+    bg_proc_track "$MOCK_PID"
     local i=0
     while [[ ! -S "$sock" && $i -lt 50 ]]; do
         sleep 0.05
@@ -192,10 +226,24 @@ if [[ -S "$sock_c" ]]; then
     assert_contains 'handoff' "$record_c" "(c) send carries the requested type"
     assert_contains 'loom_4199' "$record_c" "(c) send carries the task_id"
     assert_contains 'starting issue 4199' "$record_c" "(c) send carries the body"
-    assert_contains '"to": "*"' "$record_c" "(c) send carries to=* (broadcast)"
+    # Serialization-agnostic since #9517: the contract is the parsed shape of
+    # the send request, not the byte layout (serde_json is compact; the old
+    # python client spaced its separators).
+    send_to="$(printf '%s\n' "$record_c" | "$PY" -c '
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if msg.get("op") == "send":
+        print(msg.get("to", ""))
+        break
+')"
+    assert_eq "*" "$send_to" "(c) send carries to=* (broadcast)"
     # Ensure hello precedes send on the wire.
     hello_idx="$(printf '%s\n' "$record_c" | grep -n hello | head -1 | cut -d: -f1)"
-    send_idx="$(printf '%s\n' "$record_c" | grep -n '"op": "send"' | head -1 | cut -d: -f1)"
+    send_idx="$(printf '%s\n' "$record_c" | grep -n '"op": *"send"' | head -1 | cut -d: -f1)"
     if [[ -n "$hello_idx" && -n "$send_idx" && "$hello_idx" -lt "$send_idx" ]]; then
         pass "(c) hello precedes send"
     else

@@ -18,13 +18,43 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SWEEP_MD="$SCRIPT_DIR/../../../defaults/.claude/commands/loom/sweep.md"
+SWEEP_SKILL_DIR="$SCRIPT_DIR/../../../defaults/.claude/commands/loom"
 GUIDE_MD="$SCRIPT_DIR/../../../defaults/roles/guide.md"
 
-if [[ ! -f "$SWEEP_MD" ]]; then
-    echo "FAIL: skill file not found at $SWEEP_MD" >&2
+if [[ ! -d "$SWEEP_SKILL_DIR" ]]; then
+    echo "FAIL: skill directory not found at $SWEEP_SKILL_DIR" >&2
     exit 1
 fi
+
+# The /loom:sweep skill in document order (#7726 split the monolithic
+# sweep.md into a dispatcher + 11 sibling reference files). Concatenate them
+# into one file so every assertion below finds its content wherever it now
+# lives — mirrors SWEEP_SKILL_FILES in
+# loom-daemon/tests/sweep_md_doc_lint.rs.
+SWEEP_SKILL_FILES=(
+    sweep.md
+    sweep-arguments.md
+    sweep-examples.md
+    sweep-execution-model.md
+    sweep-backend-detection.md
+    sweep-scheduling-signals.md
+    sweep-dry-run.md
+    sweep-mode-c-lifecycle.md
+    sweep-wave-lifecycle.md
+    sweep-summary-output.md
+    sweep-run-hygiene.md
+    sweep-reference.md
+)
+SWEEP_MD="$(mktemp)"
+trap 'rm -f "$SWEEP_MD"' EXIT
+for f in "${SWEEP_SKILL_FILES[@]}"; do
+    path="$SWEEP_SKILL_DIR/$f"
+    if [[ ! -f "$path" ]]; then
+        echo "FAIL: skill sibling file not found at $path" >&2
+        exit 1
+    fi
+    cat "$path" >> "$SWEEP_MD"
+done
 
 PASS=0
 FAIL=0
@@ -80,7 +110,7 @@ echo
 echo "--- Detection: authoritative body-text signal, same-candidate-set only ---"
 
 assert_contains "Detection reuses guide.md parse_dependencies convention" 'parse_dependencies'
-assert_contains "Detection restricted to Depends on / Requires" '(Depends on|Requires) #[0-9]+'
+assert_contains "Detection restricted to Depends on / Requires" '(Depends on|Requires)[*_:[:space:]]*#[0-9]+'
 assert_contains "Blocked by deliberately excluded from stacking detection" 'EXCLUDES `Blocked by`'
 assert_contains "body field added to existing gh issue view read (no new API call)" 'no new API call'
 # THE load-bearing guard: same-candidate-set restriction must be stated explicitly.
@@ -123,7 +153,13 @@ assert_contains "Generalizes single global DEPENDS_ON value" 'the pre-existing s
 assert_contains "worktree.sh --base mechanics untouched" 'worktree.sh N --base feature/issue-<parent>'
 assert_contains "gh pr create --base mechanics untouched" 'gh pr create --base feature/issue-<parent>'
 assert_contains "Explicit --depends-on never overridden by detected edge" 'never override'
-assert_contains "Daemon path forwards depends_on per candidate" 'mcp__loom__dispatch_sweep(kind={"Issue": N}, depends_on=<parent>)'
+# Param-tolerant on purpose: the load-bearing contract is that the daemon-path
+# dispatch call forwards `depends_on=<parent>` for a candidate with a detected
+# edge. The call's *other* parameters are free to grow (e.g. `workspace_root=`
+# added by #4549), so anchoring on the closing `)` would make this a stale
+# doc-literal assertion that breaks on every unrelated signature addition.
+assert_matches "Daemon path forwards depends_on per candidate" \
+    'mcp__loom__dispatch_sweep\(kind=[{]"Issue": N[}], depends_on=<parent>'
 assert_contains "No daemon-side code change" 'no daemon-side code change'
 
 echo
@@ -146,7 +182,7 @@ echo
 echo "--- Cross-file: guide.md regex convention still present (reused, not modified) ---"
 
 if [[ -f "$GUIDE_MD" ]]; then
-    if grep -qF -- '(Blocked by|Depends on|Requires|\- \[.\]) #[0-9]+' "$GUIDE_MD"; then
+    if grep -qF -- '(Blocked by|Depends on|Requires|\- \[ \])[*_:[:space:]]*#[0-9]+' "$GUIDE_MD"; then
         echo "PASS: guide.md parse_dependencies regex convention intact (reused by --auto-stack)"
         PASS=$((PASS + 1))
     else
