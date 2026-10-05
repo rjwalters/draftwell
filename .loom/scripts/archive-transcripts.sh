@@ -90,10 +90,33 @@ lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 # slugify a path the way Claude Code names its projects/ subdirs: '/' -> '-'.
 slugify() { printf '%s' "$1" | sed 's#/#-#g'; }
 
-# portable mtime epoch (BSD stat then GNU stat).
-file_mtime_epoch() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
-file_size()        { stat -f %z "$1" 2>/dev/null || stat -c %s "$1" 2>/dev/null || echo 0; }
-epoch_to_date()    { date -r "$1" +%Y-%m-%d 2>/dev/null || date -d "@$1" +%Y-%m-%d 2>/dev/null || date +%Y-%m-%d; }
+# Portable mtime epoch / size. GNU `stat -c` first (it is an illegal option on
+# BSD/macOS, so it fails cleanly there), then BSD `stat -f`. The reverse order
+# MISFIRES on GNU: `stat -f %m <path>` there means --file-system (a bare mode
+# flag, not a format arg) and prints a multi-line filesystem report to stdout
+# while still exiting non-zero — a `2>/dev/null || fallback` chain doesn't
+# catch this because the polluted stdout was already emitted before the
+# command failed, so it leaks into the captured value ahead of the fallback's
+# real output. Validate the captured value is purely numeric instead of
+# trusting the exit code (same technique as build-slot.sh's
+# _loom_build_slot_age_secs).
+file_mtime_epoch() {
+    local v
+    v="$(stat -c %Y "$1" 2>/dev/null || true)"
+    [[ "$v" =~ ^[0-9]+$ ]] || v="$(stat -f %m "$1" 2>/dev/null || true)"
+    [[ "$v" =~ ^[0-9]+$ ]] || v=0
+    printf '%s\n' "$v"
+}
+file_size() {
+    local v
+    v="$(stat -c %s "$1" 2>/dev/null || true)"
+    [[ "$v" =~ ^[0-9]+$ ]] || v="$(stat -f %z "$1" 2>/dev/null || true)"
+    [[ "$v" =~ ^[0-9]+$ ]] || v=0
+    printf '%s\n' "$v"
+}
+# Issue #8504: -u throughout — this feeds the machine-readable `date` field
+# in index.json, so it must be the UTC calendar day, not the host-local one.
+epoch_to_date()    { date -u -r "$1" +%Y-%m-%d 2>/dev/null || date -u -d "@$1" +%Y-%m-%d 2>/dev/null || date -u +%Y-%m-%d; }
 iso_now()          { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # ---------------------------------------------- resolve enable + destination ---
@@ -251,7 +274,7 @@ write_index() {
       obj="$(jq -n \
         --arg id "$agent_id" --arg role "$role" --arg desc "$desc" \
         --arg issue "$issue" --arg model "$model" \
-        --arg start "$start" --arg end "$end" \
+        --arg start "$start" --arg range_end "$end" \
         --arg arm "$ARM" --arg attempt "$ATTEMPT" \
         --arg tr "subagents/$agent_id.jsonl" --arg meta "subagents/$agent_id.meta.json" \
         '{agent_id:$id,
@@ -262,7 +285,7 @@ write_index() {
           arm:(($arm|select(.!="")) // null),
           attempt:(($attempt|select(.!="")|tonumber?) // null),
           start_ts:(($start|select(.!="")) // null),
-          end_ts:(($end|select(.!="")) // null),
+          end_ts:(($range_end|select(.!="")) // null),
           transcript:$tr, meta:$meta}')"
       acc="$acc$obj"$'\n'
     done < <(find "$subdir" -maxdepth 1 -name '*.meta.json' 2>/dev/null | sort)

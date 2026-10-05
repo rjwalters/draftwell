@@ -7,6 +7,14 @@ This file contains detailed reference documentation for the Architect role, incl
 
 ---
 
+## ⚠️ `--body @path` Does NOT Expand — It Posts the Literal String
+
+If you post a comment via `gh issue comment` / `gh pr comment` / `gh api ...
+comments` from a scratch file, `--body @path` (and `gh api -f body=@path`)
+posts the literal string `@path`, not the file's contents. **Full pitfall,
+incident citation, and fixes**:
+[`comment-body-literal-path.md`](comment-body-literal-path.md).
+
 ## Label Workflow Details
 
 ### Your Role: Proposal Generation Only
@@ -36,13 +44,10 @@ This file contains detailed reference documentation for the Architect role, incl
 
 ```bash
 # Check if there are already open proposals (don't spam)
-gh issue list --label="loom:architect" --state=open
+gh issue list --label="loom:architect" --state=open --limit 500
 
-# Create new proposal
-gh issue create --title "..." --body "..."
-
-# Add proposal label (blue badge)
-gh issue edit <number> --add-label "loom:architect"
+# Create new proposal — blue-badge label applied atomically at creation (#5047)
+./.loom/scripts/create-issue.sh --title "..." --body "..." --label "loom:architect"
 ```
 
 **Important**: Don't create too many proposals at once. If there are already 3+ open proposals, wait for the user to approve/reject some before creating more.
@@ -79,8 +84,12 @@ When the user explicitly instructs you to analyze a specific area or create a pr
 # Analyze the specified area
 # ... examine code, identify opportunities ...
 
-# Create proposal with clear context
-gh issue create --title "Refactor terminal state management to use reducer pattern" --body "$(cat <<'EOF'
+# Create proposal with clear context, applying its label ATOMICALLY at
+# creation (#5047) — a follow-up `gh issue edit --add-label` doubles the
+# request count and can half-fail, leaving an unlabelled issue behind.
+./.loom/scripts/create-issue.sh --title "Refactor terminal state management to use reducer pattern" \
+  --label "loom:architect" \
+  --body "$(cat <<'EOF'
 ## Problem Statement
 Per user request to analyze terminal state management architecture...
 
@@ -92,14 +101,12 @@ Per user request to analyze terminal state management architecture...
 EOF
 )"
 
-# Apply architect label
-gh issue edit <number> --add-label "loom:architect"
-gh issue comment <number> --body "Created per user request to analyze terminal state management"
+./.loom/scripts/post-comment.sh <number> --body "Created per user request to analyze terminal state management"
 ```
 
-### Why This Matters
+### Why this matters
 
-- Users may want proposals for specific areas immediately
+- want proposals for specific areas now
 - Users may want to test architectural workflows
 - Users may have insights about areas needing attention
 - Flexibility is important for manual orchestration mode
@@ -124,16 +131,15 @@ gh issue comment <number> --body "Created per user request to analyze terminal s
 
 ### Applying Tier Labels
 
-```bash
-# After creating a proposal, add the appropriate tier label
-gh issue edit <number> --add-label "loom:architect"
+Apply `loom:architect` AND the tier label in the SAME `create-issue.sh` call
+that files the proposal (#5047) — never a follow-up `gh issue edit
+--add-label`, which doubles the request count and can half-fail into an
+unlabelled issue no queue query finds:
 
-# AND add the tier label based on goal alignment
-gh issue edit <number> --add-label "tier:goal-advancing"     # Tier 1
-# OR
-gh issue edit <number> --add-label "tier:goal-supporting"    # Tier 2
-# OR
-gh issue edit <number> --add-label "tier:maintenance"        # Tier 3
+```bash
+./.loom/scripts/create-issue.sh --title "..." --body "..." \
+  --label "loom:architect" \
+  --label "tier:goal-advancing"     # or tier:goal-supporting | tier:maintenance
 ```
 
 ---
@@ -152,9 +158,9 @@ gh issue edit <number> --add-label "tier:maintenance"        # Tier 3
 8. **Present recommendation**: Single approach with justification based on their requirements
 9. **Document alternatives considered**: Briefly mention other options and why they were ruled out
 10. **Estimate impact**: Complexity, risks, dependencies
-11. **Assess priority**: Determine if `loom:urgent` label is warranted
-12. **Create the issue**: Use `gh issue create` with focused recommendation
-13. **Add proposal label**: Run `gh issue edit <number> --add-label "loom:architect"`
+11. **Assess priority**: If it looks critical, say so in the body (never apply a priority label)
+12. **Create the issue**: Use `./.loom/scripts/create-issue.sh` with focused recommendation
+13. **Add proposal label**: Pass `--label "loom:architect"` on that same creation call — never a follow-up `gh issue edit --add-label`
 
 **Key Difference from old workflow**: Steps 3-6 are about requirements gathering. You ask questions BEFORE creating issues, enabling you to recommend ONE approach instead of presenting multiple options without guidance.
 
@@ -225,16 +231,10 @@ To avoid overwhelming the backlog:
 
 ## Priority Assessment Details
 
-When creating issues, consider whether the `loom:urgent` label is needed:
-
-- **Default**: No priority label (most issues)
-- **Add `loom:urgent`** only if:
-  - Critical bug affecting users NOW
-  - Security vulnerability requiring immediate patch
-  - Blocks all other work
-  - Production issue that needs hotfix
-
-**Note**: Use urgent sparingly. When in doubt, leave as normal priority and let the user decide.
+Architects never apply a priority label. `loom:operator-priority` is the
+operator's human-only star (#9244). If an issue looks critical (a user-facing
+bug NOW, a security hole, a hotfix, or it blocks all other work), say so in the
+body and let the operator decide whether to star it.
 
 ---
 

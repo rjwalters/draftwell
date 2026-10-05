@@ -124,12 +124,12 @@ else
 fi
 
 # ============================================================
-# Section 2: socket resolution (config > LOOM_SAFEHOUSE_SOCKET > SAFEHOUSED_SOCKET)
+# Section 2: socket resolution (LOOM_SAFEHOUSE_SOCKET > SAFEHOUSED_SOCKET > config)
 # ============================================================
 echo "Testing loom_mcp_safehouse_socket..."
 
 assert_eq "" "$(loom_mcp_safehouse_socket "$_empty_repo")" \
-    "empty when nothing resolves"
+    "empty when nothing resolves (deliberately NO conventional-path fallback -- #5523)"
 assert_eq "/tmp/a.sock" \
     "$(LOOM_SAFEHOUSE_SOCKET=/tmp/a.sock loom_mcp_safehouse_socket "$_empty_repo")" \
     "LOOM_SAFEHOUSE_SOCKET is used"
@@ -147,8 +147,11 @@ if $HAVE_JQ; then
 { "safehouse": { "socket": "/run/cfg.sock" } }
 JSON
     assert_eq "/run/cfg.sock" \
+        "$(loom_mcp_safehouse_socket "$_sock_repo")" \
+        "config safehouse.socket is used when no env override is set"
+    assert_eq "/tmp/env.sock" \
         "$(LOOM_SAFEHOUSE_SOCKET=/tmp/env.sock loom_mcp_safehouse_socket "$_sock_repo")" \
-        "config safehouse.socket wins over env (matches daemon resolve order)"
+        "env wins over config (matches daemon resolve order)"
     rm -rf "$_sock_repo"
 fi
 
@@ -273,6 +276,15 @@ rm -rf "$_pf_dir"
 # ============================================================
 # Section 6: DEMOTED setup-mcp.sh — no `loom` entry, shadowing migration (#4230)
 # ============================================================
+# scripts/setup-mcp.sh lives at the repo root, not under defaults/, so it is
+# never shipped into an installed consumer repo. Section 6 exercises it
+# directly and is therefore source-tree-only by design (#6194/#6241) — it
+# SKIPs (rather than errors) when run outside Loom's own checkout, while the
+# rest of this suite (which exercises the shipped mcp-config.sh lib) still
+# runs normally.
+if [[ ! -f "$REPO_ROOT/scripts/setup-mcp.sh" ]]; then
+    echo -e "  ${YELLOW}SKIP${NC}: Section 6 (setup-mcp.sh demotion tests) — $REPO_ROOT/scripts/setup-mcp.sh not found (not shipped into an installed repo)"
+else
 echo "Testing setup-mcp.sh demotion: no loom entry + shadowing migration (#4230)..."
 
 _seed_setup_mcp_ws() {
@@ -373,6 +385,7 @@ JSON
 else
     echo -e "  ${YELLOW}SKIP${NC}: setup-mcp.sh enabled test (jq not installed)"
 fi
+fi
 
 rm -rf "$_empty_repo"
 
@@ -393,12 +406,30 @@ command -v node >/dev/null 2>&1 && HAVE_NODE=true
 HAVE_GIT=false
 command -v git >/dev/null 2>&1 && HAVE_GIT=true
 
-# Healthy mcp-loom stub: writes the exact startup line check_mcp_server greps for.
+# Healthy mcp-loom stub: prints the historical startup banner (kept, so a
+# banner-printing server is still exercised) AND responds to the
+# protocol-level `initialize` handshake _mcp_smoke_test now performs (#143 /
+# 2am#307) — the health check no longer greps for the banner string, it
+# validates a JSON-RPC response on stdout.
 _write_healthy_mcp_stub() {
     local dir="$1" # e.g. .../mcp-loom
     mkdir -p "$dir/dist"
     cat >"$dir/dist/index.js" <<'JS'
 process.stderr.write("Loom MCP server running on stdio\n");
+let buf = "";
+process.stdin.on("data", (chunk) => {
+    buf += chunk;
+    if (buf.includes("\n")) {
+        process.stdout.write(
+            JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "stub", version: "0.0.0" } },
+            }) + "\n"
+        );
+        process.exit(0);
+    }
+});
 JS
 }
 
@@ -470,6 +501,651 @@ JSON
     rm -rf "$_fx"
 else
     echo -e "  ${YELLOW}SKIP${NC}: MCP pre-flight fallback tests (node and/or git not installed)"
+fi
+
+# ============================================================
+# Section 8: stale-bundle rebuild — abort on failure + npm ci self-repair (#5032)
+#
+# Before #5032 a failed rebuild on the STALE-bundle path was swallowed
+# ("continuing with existing bundle") and fell through to a smoke test against
+# the very same known-broken dist — guaranteed to fail, with no actionable
+# message. And _try_mcp_rebuild only ever ran `npm run build`, so a
+# missing/half-installed node_modules (the laptop-host root cause: an EMPTY
+# node_modules/@modelcontextprotocol/sdk directory) was indistinguishable from
+# a genuine build-source error and needed an operator to run `npm ci` by hand.
+# ============================================================
+echo ""
+echo "Testing stale-bundle rebuild abort + npm ci self-repair (#5032)..."
+
+# A dist stub that announces itself on stderr. If the smoke test ever runs, the
+# marker shows up in the captured wrapper output — that is how the tests below
+# assert "did NOT fall through to the smoke test".
+_write_broken_dist() {
+    local dir="$1" # e.g. .../mcp-loom
+    mkdir -p "$dir/dist"
+    cat >"$dir/dist/index.js" <<'JS'
+process.stderr.write("SMOKE_TEST_RAN: bundle is broken\n");
+process.exit(1);
+JS
+}
+
+# npm stub: records every invocation and simulates ci/build outcomes.
+# Driven by marker files in $NPM_STUB_DIR so each fixture can pick a behavior
+# without regenerating the script.
+_write_npm_stub() {
+    local stub="$1"
+    mkdir -p "$(dirname "$stub")"
+    cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >>"${NPM_STUB_LOG}"
+case "${1:-}" in
+    ci)
+        if [[ -f "${NPM_STUB_DIR}/ci-fails" ]]; then
+            echo "npm ERR! network request to https://registry.npmjs.org failed" >&2
+            exit 1
+        fi
+        mkdir -p node_modules/@modelcontextprotocol/sdk node_modules/typescript
+        echo '{"name":"@modelcontextprotocol/sdk","version":"1.0.0"}' \
+            >node_modules/@modelcontextprotocol/sdk/package.json
+        echo '{"name":"typescript","version":"5.0.0"}' \
+            >node_modules/typescript/package.json
+        exit 0
+        ;;
+    run)
+        if [[ -f "${NPM_STUB_DIR}/build-fails" ]]; then
+            echo "src/index.ts(1,1): error TS1005: build source error" >&2
+            exit 1
+        fi
+        if [[ ! -f node_modules/@modelcontextprotocol/sdk/package.json ]]; then
+            echo "Error: Cannot find module '@modelcontextprotocol/sdk' (MODULE_NOT_FOUND)" >&2
+            exit 1
+        fi
+        mkdir -p dist
+        cat >dist/index.js <<'JSEOF'
+process.stderr.write("Loom MCP server running on stdio\n");
+let buf = "";
+process.stdin.on("data", (chunk) => {
+    buf += chunk;
+    if (buf.includes("\n")) {
+        process.stdout.write(
+            JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "stub", version: "0.0.0" } },
+            }) + "\n"
+        );
+        process.exit(0);
+    }
+});
+JSEOF
+        exit 0
+        ;;
+esac
+exit 0
+STUB
+    chmod +x "$stub"
+}
+
+# Build an isolated candidate workspace with a STALE bundle (src newer than
+# dist) and a package.json declaring one runtime + one dev dependency.
+# $2 selects the node_modules state: complete | empty-shell | absent
+# $3 = "lock" to drop a package-lock.json alongside.
+_seed_stale_mcp_ws() {
+    local ws="$1" deps_state="$2" lock="${3:-}"
+    local pkg="$ws/mcp-loom"
+    mkdir -p "$pkg/src"
+    _write_broken_dist "$pkg"
+    cat >"$pkg/package.json" <<'JSON'
+{
+  "name": "mcp-loom",
+  "version": "1.0.0",
+  "dependencies": { "@modelcontextprotocol/sdk": "^1.0.0" },
+  "devDependencies": { "typescript": "^5.0.0" }
+}
+JSON
+    [[ "$lock" == "lock" ]] && echo '{"lockfileVersion":3}' >"$pkg/package-lock.json"
+    case "$deps_state" in
+        complete)
+            mkdir -p "$pkg/node_modules/@modelcontextprotocol/sdk" "$pkg/node_modules/typescript"
+            echo '{"name":"@modelcontextprotocol/sdk"}' \
+                >"$pkg/node_modules/@modelcontextprotocol/sdk/package.json"
+            echo '{"name":"typescript"}' >"$pkg/node_modules/typescript/package.json"
+            ;;
+        empty-shell)
+            # The laptop-host shape: node_modules exists and is non-empty, but the
+            # sdk package directory is an empty husk.
+            mkdir -p "$pkg/node_modules/@modelcontextprotocol/sdk" "$pkg/node_modules/typescript"
+            echo '{"name":"typescript"}' >"$pkg/node_modules/typescript/package.json"
+            ;;
+        absent) : ;;
+    esac
+    cat >"$ws/.mcp.json" <<JSON
+{ "mcpServers": { "loom": { "command": "node", "args": ["$pkg/dist/index.js"] } } }
+JSON
+    # Force staleness deterministically (no sleep): dist in 2020, src in 2025.
+    touch -t 202001010000 "$pkg/dist/index.js"
+    : >"$pkg/src/index.ts"
+    touch -t 202501010000 "$pkg/src/index.ts"
+}
+
+# Run _check_mcp_candidate against a workspace with the npm stub wired in.
+# The rc is captured with `|| rc=$?` because the wrapper sets `set -e` when
+# sourced — a bare failing call would kill the harness before the RC echo.
+_run_check_candidate() {
+    local ws="$1" stub_dir="$2"
+    NPM_STUB_DIR="$stub_dir" NPM_STUB_LOG="$stub_dir/npm-calls.log" \
+    LOOM_NPM_BIN="$stub_dir/npm" LOOM_WORKSPACE="$ws" CLAUDE_WRAPPER_SOURCE_ONLY=1 \
+        bash -c '
+            source "$1"
+            rc=0
+            _check_mcp_candidate "$2" || rc=$?
+            echo "RC=$rc"
+        ' _ "$WRAPPER" "$ws" 2>&1 || true
+}
+
+if $HAVE_NODE; then
+    # --- 8a. Stale bundle, healthy deps, genuine build-source failure ---------
+    _s8a="$(mktemp -d)"
+    _seed_stale_mcp_ws "$_s8a/ws" complete lock
+    _write_npm_stub "$_s8a/stub/npm"
+    : >"$_s8a/stub/npm-calls.log"
+    : >"$_s8a/stub/build-fails"
+    _out8a="$(_run_check_candidate "$_s8a/ws" "$_s8a/stub")"
+    _log8a="$(cat "$_s8a/stub/npm-calls.log")"
+
+    assert_contains "RC=1" "$_out8a" \
+        "8a: stale bundle + failed rebuild aborts the candidate (rc 1, #5032)"
+    assert_contains "aborting this candidate" "$_out8a" \
+        "8a: abort message replaces 'continuing with existing bundle' (#5032)"
+    assert_contains "Repair manually" "$_out8a" \
+        "8a: abort message names the repair command (#5032)"
+    assert_not_contains "continuing with existing bundle" "$_out8a" \
+        "8a: the swallow-and-continue branch is gone (#5032)"
+    assert_not_contains "SMOKE_TEST_RAN" "$_out8a" \
+        "8a: does NOT fall through to a smoke test against the broken bundle (#5032)"
+    assert_contains "run build" "$_log8a" \
+        "8a: npm run build was attempted"
+    assert_not_contains "ci" "$_log8a" \
+        "8a: npm ci is NOT run when node_modules is complete (not a repairable case)"
+    rm -rf "$_s8a"
+
+    # --- 8b. Stale bundle, empty-shell dependency + lockfile -> npm ci repair --
+    _s8b="$(mktemp -d)"
+    _seed_stale_mcp_ws "$_s8b/ws" empty-shell lock
+    _write_npm_stub "$_s8b/stub/npm"
+    : >"$_s8b/stub/npm-calls.log"
+    _out8b="$(_run_check_candidate "$_s8b/ws" "$_s8b/stub")"
+    _log8b="$(cat "$_s8b/stub/npm-calls.log")"
+
+    assert_contains "ci" "$_log8b" \
+        "8b: empty node_modules package + package-lock.json triggers npm ci (#5032)"
+    assert_contains "run build" "$_log8b" \
+        "8b: npm run build still runs after the npm ci repair (#5032)"
+    assert_contains "RC=0" "$_out8b" \
+        "8b: candidate becomes healthy after self-repair, no operator action (#5032)"
+    assert_contains "self-repair" "$_out8b" \
+        "8b: the self-repair attempt is logged"
+    rm -rf "$_s8b"
+
+    # --- 8b2. node_modules entirely absent + lockfile -> npm ci repair --------
+    _s8b2="$(mktemp -d)"
+    _seed_stale_mcp_ws "$_s8b2/ws" absent lock
+    _write_npm_stub "$_s8b2/stub/npm"
+    : >"$_s8b2/stub/npm-calls.log"
+    _out8b2="$(_run_check_candidate "$_s8b2/ws" "$_s8b2/stub")"
+    assert_contains "ci" "$(cat "$_s8b2/stub/npm-calls.log")" \
+        "8b2: missing node_modules + package-lock.json triggers npm ci (#5032)"
+    assert_contains "RC=0" "$_out8b2" \
+        "8b2: candidate healthy after repairing a missing node_modules (#5032)"
+    rm -rf "$_s8b2"
+
+    # --- 8c. npm ci itself fails (no network) -> abort, no fall-through -------
+    _s8c="$(mktemp -d)"
+    _seed_stale_mcp_ws "$_s8c/ws" empty-shell lock
+    _write_npm_stub "$_s8c/stub/npm"
+    : >"$_s8c/stub/npm-calls.log"
+    : >"$_s8c/stub/ci-fails"
+    _out8c="$(_run_check_candidate "$_s8c/ws" "$_s8c/stub")"
+    _log8c="$(cat "$_s8c/stub/npm-calls.log")"
+
+    assert_contains "RC=1" "$_out8c" \
+        "8c: failed npm ci aborts the candidate (#5032)"
+    assert_contains "npm ci failed" "$_out8c" \
+        "8c: failed npm ci produces an actionable error (#5032)"
+    assert_contains "Repair manually" "$_out8c" \
+        "8c: failed npm ci names the repair command (#5032)"
+    assert_not_contains "SMOKE_TEST_RAN" "$_out8c" \
+        "8c: failed npm ci does NOT fall through to the smoke test (#5032)"
+    assert_not_contains "run build" "$_log8c" \
+        "8c: failed npm ci short-circuits before npm run build (#5032)"
+    rm -rf "$_s8c"
+
+    # --- 8d. No lockfile: cannot self-repair, but still aborts actionably ----
+    _s8d="$(mktemp -d)"
+    _seed_stale_mcp_ws "$_s8d/ws" empty-shell   # no lockfile
+    _write_npm_stub "$_s8d/stub/npm"
+    : >"$_s8d/stub/npm-calls.log"
+    _out8d="$(_run_check_candidate "$_s8d/ws" "$_s8d/stub")"
+    _log8d="$(cat "$_s8d/stub/npm-calls.log")"
+    assert_not_contains "ci" "$_log8d" \
+        "8d: no package-lock.json -> npm ci is not attempted (#5032)"
+    assert_contains "no package-lock.json" "$_out8d" \
+        "8d: the un-repairable case is explained in the log (#5032)"
+    assert_contains "RC=1" "$_out8d" \
+        "8d: un-repairable stale bundle still aborts rather than falling through (#5032)"
+    rm -rf "$_s8d"
+
+    # --- 8e. Missing entry point (regression guard: behavior UNCHANGED) ------
+    # The sibling path already returned 1 on rebuild failure and 0 on success.
+    _s8e="$(mktemp -d)"
+    _seed_stale_mcp_ws "$_s8e/ws" complete lock
+    rm -f "$_s8e/ws/mcp-loom/dist/index.js"   # entry point missing, not stale
+    _write_npm_stub "$_s8e/stub/npm"
+    : >"$_s8e/stub/npm-calls.log"
+    _out8e_ok="$(_run_check_candidate "$_s8e/ws" "$_s8e/stub")"
+    assert_contains "RC=0" "$_out8e_ok" \
+        "8e: missing entry point + successful rebuild still returns 0 (unchanged)"
+    assert_contains "MCP entry point missing" "$_out8e_ok" \
+        "8e: missing entry point still logs its own warning (unchanged)"
+
+    rm -f "$_s8e/ws/mcp-loom/dist/index.js"
+    : >"$_s8e/stub/build-fails"
+    _out8e_fail="$(_run_check_candidate "$_s8e/ws" "$_s8e/stub")"
+    assert_contains "RC=1" "$_out8e_fail" \
+        "8e: missing entry point + failed rebuild still returns 1 (unchanged)"
+    rm -rf "$_s8e"
+else
+    echo -e "  ${YELLOW}SKIP${NC}: stale-bundle rebuild tests (node not installed)"
+fi
+
+# ============================================================
+# Section 9: node/npm resolution without a login PATH (#5032)
+#
+# claude-wrapper runs from launchd / `ssh host 'cmd'` non-login shells that
+# never source the login profile, so /opt/homebrew/bin is not on PATH. The
+# rebuild path must resolve npm/node from an ordered explicit candidate list
+# (the lib/locate-daemon-bin.sh pattern from #4875), not a bare PATH lookup.
+# ============================================================
+echo ""
+echo "Testing node/npm resolution with a minimal PATH (#5032)..."
+
+_BASH_BIN="$(command -v bash)"
+
+_locate_node_tool_in_env() {
+    # $1 = tool, remaining args = env assignments.
+    # `bash` is invoked by absolute path so the assignments may narrow $PATH.
+    local tool="$1"; shift
+    env "$@" CLAUDE_WRAPPER_SOURCE_ONLY=1 "$_BASH_BIN" -c '
+        source "$1" >/dev/null 2>&1
+        _locate_node_tool "$2" || true
+    ' _ "$WRAPPER" "$tool" 2>/dev/null || true
+}
+
+_fake_node="$(mktemp -d)/node"
+mkdir -p "$(dirname "$_fake_node")"
+printf '#!/usr/bin/env bash\necho fake\n' >"$_fake_node"
+chmod +x "$_fake_node"
+assert_eq "$_fake_node" "$(_locate_node_tool_in_env node "LOOM_NODE_BIN=$_fake_node")" \
+    "LOOM_NODE_BIN override wins over PATH (#5032)"
+assert_eq "$_fake_node" "$(_locate_node_tool_in_env npm "LOOM_NPM_BIN=$_fake_node")" \
+    "LOOM_NPM_BIN override wins over PATH (#5032)"
+rm -rf "$(dirname "$_fake_node")"
+
+if $HAVE_NODE; then
+    _real_node="$(command -v node)"
+    _real_node_dir="$(dirname "$_real_node")"
+    case "$_real_node_dir" in
+        # node lives in a candidate dir that a non-login shell's default
+        # PATH (/usr/bin:/bin) does NOT include — exactly the #5032 scenario.
+        /opt/homebrew/bin|/usr/local/bin|/opt/local/bin|/snap/bin)
+            assert_eq "$_real_node" \
+                "$(_locate_node_tool_in_env node 'PATH=/usr/bin:/bin')" \
+                "node resolves from the explicit candidate list under a non-login PATH (#5032)"
+            ;;
+        *)
+            echo -e "  ${YELLOW}SKIP${NC}: minimal-PATH node resolution (node is already on the non-login PATH: $_real_node_dir)"
+            ;;
+    esac
+else
+    echo -e "  ${YELLOW}SKIP${NC}: minimal-PATH node resolution (node not installed)"
+fi
+
+# ============================================================
+# Section 10: _mcp_node_modules_unusable classification (#5032)
+# ============================================================
+echo ""
+echo "Testing _mcp_node_modules_unusable classification (#5032)..."
+
+_deps_unusable_rc() {
+    CLAUDE_WRAPPER_SOURCE_ONLY=1 bash -c '
+        source "$1" >/dev/null 2>&1
+        if _mcp_node_modules_unusable "$2"; then echo "unusable"; else echo "ok"; fi
+    ' _ "$WRAPPER" "$1" 2>/dev/null
+}
+
+_cls="$(mktemp -d)"
+for _state in complete empty-shell absent; do
+    mkdir -p "$_cls/$_state"
+    _seed_stale_mcp_ws "$_cls/$_state" "$_state" lock
+done
+assert_eq "ok" "$(_deps_unusable_rc "$_cls/complete/mcp-loom")" \
+    "complete node_modules is usable (a build failure there is a real source error)"
+assert_eq "unusable" "$(_deps_unusable_rc "$_cls/empty-shell/mcp-loom")" \
+    "an EMPTY dependency directory is classified unusable (laptop-host root cause, #5032)"
+assert_eq "unusable" "$(_deps_unusable_rc "$_cls/absent/mcp-loom")" \
+    "a missing node_modules is classified unusable (#5032)"
+mkdir -p "$_cls/emptydir/mcp-loom/node_modules"
+cp "$_cls/complete/mcp-loom/package.json" "$_cls/emptydir/mcp-loom/package.json"
+assert_eq "unusable" "$(_deps_unusable_rc "$_cls/emptydir/mcp-loom")" \
+    "a completely empty node_modules directory is classified unusable (#5032)"
+rm -rf "$_cls"
+
+# ============================================================
+# Section 11: check_global_mcp_configs presence check (#5033)
+#
+# The function must warn when the user-scope `loom` MCP registration
+# (#4230) is absent from ~/.claude.json's mcpServers — not just validate
+# already-present entries' binary paths — while remaining warning-only
+# (never aborts, RC always 0).
+# ============================================================
+echo ""
+echo "Testing check_global_mcp_configs presence check (#5033)..."
+
+HAVE_PYTHON3=false
+command -v python3 >/dev/null 2>&1 && HAVE_PYTHON3=true
+
+if $HAVE_PYTHON3; then
+    # 11a. No mcpServers key at all (the laptop-host incident case) -> warns.
+    _home_missing_key="$(mktemp -d)"
+    cat >"$_home_missing_key/.claude.json" <<'JSON'
+{ "other": "stuff" }
+JSON
+    _out_missing_key="$(HOME="$_home_missing_key" CLAUDE_WRAPPER_SOURCE_ONLY=1 bash -c '
+        source "$1"
+        check_global_mcp_configs
+        echo "RC=$?"
+    ' _ "$WRAPPER" 2>&1)"
+    assert_contains "No 'loom' entry" "$_out_missing_key" \
+        "mcpServers key entirely absent: warns that the loom registration is missing"
+    assert_contains "install-loom.sh" "$_out_missing_key" \
+        "missing-registration warning names the install-loom.sh / loom update fix"
+    assert_contains "RC=0" "$_out_missing_key" \
+        "missing-registration check never aborts (warning-only contract preserved)"
+    rm -rf "$_home_missing_key"
+
+    # 11b. mcpServers present but no `loom` entry -> warns.
+    _home_no_loom="$(mktemp -d)"
+    cat >"$_home_no_loom/.claude.json" <<'JSON'
+{ "mcpServers": { "other": { "command": "cat", "args": [] } } }
+JSON
+    _out_no_loom="$(HOME="$_home_no_loom" CLAUDE_WRAPPER_SOURCE_ONLY=1 bash -c '
+        source "$1"
+        check_global_mcp_configs
+        echo "RC=$?"
+    ' _ "$WRAPPER" 2>&1)"
+    assert_contains "No 'loom' entry" "$_out_no_loom" \
+        "mcpServers present without a loom key: warns that the loom registration is missing"
+    assert_contains "RC=0" "$_out_no_loom" \
+        "mcpServers present without a loom key: check never aborts"
+    rm -rf "$_home_no_loom"
+
+    # 11c. mcpServers.loom present and healthy -> no presence warning.
+    _home_healthy="$(mktemp -d)"
+    cat >"$_home_healthy/.claude.json" <<JSON
+{ "mcpServers": { "loom": { "command": "$(command -v cat)", "args": [] } } }
+JSON
+    _out_healthy="$(HOME="$_home_healthy" CLAUDE_WRAPPER_SOURCE_ONLY=1 bash -c '
+        source "$1"
+        check_global_mcp_configs
+        echo "RC=$?"
+    ' _ "$WRAPPER" 2>&1)"
+    assert_not_contains "No 'loom' entry" "$_out_healthy" \
+        "healthy loom entry present: no presence warning"
+    assert_contains "RC=0" "$_out_healthy" \
+        "healthy loom entry present: check succeeds"
+    rm -rf "$_home_healthy"
+
+    # 11d. ~/.claude.json missing entirely -> unaffected (early return preserved).
+    _home_no_file="$(mktemp -d)"
+    _out_no_file="$(HOME="$_home_no_file" CLAUDE_WRAPPER_SOURCE_ONLY=1 bash -c '
+        source "$1"
+        check_global_mcp_configs
+        echo "RC=$?"
+    ' _ "$WRAPPER" 2>&1)"
+    assert_eq "RC=0" "$_out_no_file" \
+        "user .claude.json missing entirely: no output, RC=0 (early-return regression check)"
+    rm -rf "$_home_no_file"
+else
+    echo -e "  ${YELLOW}SKIP${NC}: check_global_mcp_configs presence tests (python3 not installed)"
+fi
+
+# ============================================================
+# Section 12: check_workspace_trust preflight check (#5314)
+#
+# The function must warn — but never abort — when the current workspace's
+# ~/.claude.json entry is missing or `hasTrustDialogAccepted` is not `true`,
+# and stay silent when it is `true`. Mirrors Section 11's structure.
+# ============================================================
+echo ""
+echo "Testing check_workspace_trust preflight check (#5314)..."
+
+if $HAVE_PYTHON3; then
+    _ws_dir="$(mktemp -d)"
+
+    # 12a. ~/.claude.json missing entirely -> warns (with the fix command),
+    # never aborts.
+    _home_no_state="$(mktemp -d)"
+    _out_no_state="$(HOME="$_home_no_state" LOOM_WORKSPACE="$_ws_dir" CLAUDE_WRAPPER_SOURCE_ONLY=1 bash -c '
+        source "$1"
+        check_workspace_trust
+        echo "RC=$?"
+    ' _ "$WRAPPER" 2>&1)"
+    assert_contains "not marked trusted" "$_out_no_state" \
+        "user .claude.json missing entirely: warns that the workspace is not trusted"
+    assert_contains "workspace add" "$_out_no_state" \
+        "missing-state-file warning names the 'loom-daemon workspace add' fix"
+    assert_contains "RC=0" "$_out_no_state" \
+        "missing-state-file check never aborts (warning-only contract)"
+    rm -rf "$_home_no_state"
+
+    # 12b. ~/.claude.json present, but no entry for this workspace -> warns.
+    _home_no_entry="$(mktemp -d)"
+    cat >"$_home_no_entry/.claude.json" <<JSON
+{ "projects": { "/some/other/workspace": { "hasTrustDialogAccepted": true } } }
+JSON
+    _out_no_entry="$(HOME="$_home_no_entry" LOOM_WORKSPACE="$_ws_dir" CLAUDE_WRAPPER_SOURCE_ONLY=1 bash -c '
+        source "$1"
+        check_workspace_trust
+        echo "RC=$?"
+    ' _ "$WRAPPER" 2>&1)"
+    assert_contains "is not trusted" "$_out_no_entry" \
+        "workspace has no projects[] entry: warns that it is not trusted"
+    assert_contains "RC=0" "$_out_no_entry" \
+        "no-entry check never aborts"
+    rm -rf "$_home_no_entry"
+
+    # 12c. ~/.claude.json has this workspace with hasTrustDialogAccepted=false
+    # -> warns.
+    _home_false="$(mktemp -d)"
+    cat >"$_home_false/.claude.json" <<JSON
+{ "projects": { "$_ws_dir": { "hasTrustDialogAccepted": false } } }
+JSON
+    _out_false="$(HOME="$_home_false" LOOM_WORKSPACE="$_ws_dir" CLAUDE_WRAPPER_SOURCE_ONLY=1 bash -c '
+        source "$1"
+        check_workspace_trust
+        echo "RC=$?"
+    ' _ "$WRAPPER" 2>&1)"
+    assert_contains "is not trusted" "$_out_false" \
+        "workspace explicitly untrusted (hasTrustDialogAccepted=false): warns"
+    assert_contains "RC=0" "$_out_false" \
+        "explicitly-untrusted check never aborts"
+    rm -rf "$_home_false"
+
+    # 12d. ~/.claude.json has this workspace trusted -> no warning.
+    _home_trusted="$(mktemp -d)"
+    cat >"$_home_trusted/.claude.json" <<JSON
+{ "projects": { "$_ws_dir": { "hasTrustDialogAccepted": true } } }
+JSON
+    _out_trusted="$(HOME="$_home_trusted" LOOM_WORKSPACE="$_ws_dir" CLAUDE_WRAPPER_SOURCE_ONLY=1 bash -c '
+        source "$1"
+        check_workspace_trust
+        echo "RC=$?"
+    ' _ "$WRAPPER" 2>&1)"
+    assert_not_contains "is not trusted" "$_out_trusted" \
+        "workspace trusted: no warning"
+    assert_eq "RC=0" "$_out_trusted" \
+        "workspace trusted: no output at all, RC=0"
+    rm -rf "$_home_trusted"
+
+    rm -rf "$_ws_dir"
+else
+    echo -e "  ${YELLOW}SKIP${NC}: check_workspace_trust tests (python3 not installed)"
+fi
+
+# ============================================================
+# Section 13: safehouse-socket-unresolved LOUDNESS + check-safehouse-socket.sh
+# (issue #5523)
+#
+# #5457 removed the safehouse.socket default with nothing taking its place as
+# a *check*: an unresolved socket with safehouse.enabled=true degraded to a
+# `log_warn` buried in a per-role sweep log, unnoticed for 11 hours while the
+# public fleet pulse went stale. This section covers:
+#   13a. spawn-claude.sh's warning text names the consequence, not just the
+#        mechanism (a static source check -- exercising the live injection
+#        block needs a real loom-daemon binary for token selection, which
+#        test-spawn-claude.sh already covers elsewhere).
+#   13b/c/d. The new standalone drift-check script: not-configured / resolved
+#        / unreachable-no-socket / unreachable-missing-file, --json mode, and
+#        exit codes (0 = nothing wrong, 1 = drift detected).
+# ============================================================
+echo ""
+echo "Testing safehouse-socket-unresolved loudness + check-safehouse-socket.sh (#5523)..."
+
+# 13a. spawn-claude.sh's unresolved-socket warning names the consequence.
+_spawn_claude_src="$SCRIPTS_DIR/spawn-claude.sh"
+if [[ -f "$_spawn_claude_src" ]]; then
+    _warn_line="$(grep -A0 'SAFEHOUSE DRIFT' "$_spawn_claude_src" || true)"
+    assert_contains "SAFEHOUSE DRIFT" "$_warn_line" \
+        "spawn-claude.sh's unresolved-socket warning is visually loud (#5523)"
+    assert_contains "no safehouse narration" "$_warn_line" \
+        "spawn-claude.sh's warning names the narration consequence, not just the mechanism (#5523)"
+    assert_contains "public fleet pulse" "$_warn_line" \
+        "spawn-claude.sh's warning names the downstream public-pulse consequence (#5523)"
+    assert_contains "check-safehouse-socket.sh" "$_warn_line" \
+        "spawn-claude.sh's warning points at the standalone drift check (#5523)"
+else
+    echo -e "  ${YELLOW}SKIP${NC}: spawn-claude.sh warning text check (file not found at $_spawn_claude_src)"
+fi
+
+DRIFT_SCRIPT="$SCRIPTS_DIR/check-safehouse-socket.sh"
+if [[ -x "$DRIFT_SCRIPT" ]]; then
+    _drift_fixtures="$(mktemp -d)"
+
+    # not configured
+    mkdir -p "$_drift_fixtures/disabled/.loom"
+    cat >"$_drift_fixtures/disabled/.loom/config.json" <<'JSON'
+{ "safehouse": { "enabled": false } }
+JSON
+
+    # enabled, no socket resolves at all -- the exact #5523 failure mode
+    mkdir -p "$_drift_fixtures/no-socket/.loom"
+    cat >"$_drift_fixtures/no-socket/.loom/config.json" <<'JSON'
+{ "safehouse": { "enabled": true } }
+JSON
+
+    # enabled, socket resolves AND is present on disk
+    mkdir -p "$_drift_fixtures/resolved/.loom"
+    cat >"$_drift_fixtures/resolved/.loom/config.json" <<JSON
+{ "safehouse": { "enabled": true, "socket": "$_drift_fixtures/resolved/sh.sock" } }
+JSON
+    : >"$_drift_fixtures/resolved/sh.sock"
+
+    # enabled, socket resolves but nothing is there
+    mkdir -p "$_drift_fixtures/missing-file/.loom"
+    cat >"$_drift_fixtures/missing-file/.loom/config.json" <<JSON
+{ "safehouse": { "enabled": true, "socket": "$_drift_fixtures/missing-file/nope.sock" } }
+JSON
+
+    # Isolate from any ambient safehouse env (a builder sweep session sets
+    # SAFEHOUSED_SOCKET/SAFEHOUSE_PERSONA for its own fleet-comms narration --
+    # #5523's own dev/test loop hit exactly this).
+    _drift_env=(env -u SAFEHOUSED_SOCKET -u SAFEHOUSE_PERSONA -u LOOM_SAFEHOUSE_SOCKET)
+
+    if $HAVE_JQ; then
+        # 13b. Explicit REPO_ROOT args, text mode: one exit code per drift class.
+        # NOTE: capture via `|| _rc=$?` (never a bare `|| true` + later `$?`,
+        # which would clobber `$?` back to 0) -- both to survive `set -e` on a
+        # deliberately-nonzero exit AND to record the real exit code.
+        _rc_disabled=0
+        _out_disabled="$("${_drift_env[@]}" "$DRIFT_SCRIPT" "$_drift_fixtures/disabled" 2>&1)" || _rc_disabled=$?
+        assert_contains "not configured" "$_out_disabled" \
+            "check-safehouse-socket.sh: disabled repo reports not configured"
+        assert_eq "0" "$_rc_disabled" "check-safehouse-socket.sh: disabled repo exits 0"
+
+        _rc_resolved=0
+        _out_resolved="$("${_drift_env[@]}" "$DRIFT_SCRIPT" "$_drift_fixtures/resolved" 2>&1)" || _rc_resolved=$?
+        assert_contains "OK (socket resolved" "$_out_resolved" \
+            "check-safehouse-socket.sh: resolved+present repo reports OK"
+        assert_eq "0" "$_rc_resolved" "check-safehouse-socket.sh: resolved+present repo exits 0"
+
+        _rc_no_socket=0
+        _out_no_socket="$("${_drift_env[@]}" "$DRIFT_SCRIPT" "$_drift_fixtures/no-socket" 2>&1)" || _rc_no_socket=$?
+        assert_contains "DRIFT" "$_out_no_socket" \
+            "check-safehouse-socket.sh: unresolved socket reports DRIFT (#5523's own failure mode)"
+        assert_eq "1" "$_rc_no_socket" \
+            "check-safehouse-socket.sh: unresolved socket exits 1 (non-zero = detectable without reading logs)"
+
+        _rc_missing_file=0
+        _out_missing_file="$("${_drift_env[@]}" "$DRIFT_SCRIPT" "$_drift_fixtures/missing-file" 2>&1)" || _rc_missing_file=$?
+        assert_contains "DRIFT" "$_out_missing_file" \
+            "check-safehouse-socket.sh: resolved-but-absent socket reports DRIFT"
+        assert_eq "1" "$_rc_missing_file" \
+            "check-safehouse-socket.sh: resolved-but-absent socket exits 1"
+
+        # 13c. Multiple REPO_ROOT args in one invocation: exit reflects the union.
+        _rc_multi=0
+        _out_multi="$("${_drift_env[@]}" "$DRIFT_SCRIPT" \
+            "$_drift_fixtures/disabled" "$_drift_fixtures/resolved" "$_drift_fixtures/no-socket" 2>&1)" || _rc_multi=$?
+        assert_contains "not configured" "$_out_multi" \
+            "check-safehouse-socket.sh: multi-repo run still reports the disabled repo"
+        assert_contains "OK (socket resolved" "$_out_multi" \
+            "check-safehouse-socket.sh: multi-repo run still reports the resolved repo"
+        assert_contains "DRIFT" "$_out_multi" \
+            "check-safehouse-socket.sh: multi-repo run still reports the drifted repo"
+        assert_eq "1" "$_rc_multi" \
+            "check-safehouse-socket.sh: one drifted repo among several still exits 1 (union, not majority)"
+
+        # 13d. --json mode emits a parseable array with the expected shape.
+        if command -v python3 >/dev/null 2>&1; then
+            _json_out="$("${_drift_env[@]}" "$DRIFT_SCRIPT" --json \
+                "$_drift_fixtures/disabled" "$_drift_fixtures/no-socket" "$_drift_fixtures/resolved" 2>/dev/null)" || true
+            _json_status_no_socket="$(printf '%s' "$_json_out" | python3 -c "
+import json, sys
+rows = json.load(sys.stdin)
+by_status = {r['status'] for r in rows}
+print('unreachable_no_socket' in by_status and 'not_configured' in by_status and 'resolved' in by_status)
+" 2>/dev/null || echo "PARSE_FAILED")"
+            assert_eq "True" "$_json_status_no_socket" \
+                "check-safehouse-socket.sh --json: emits a parseable array covering all three states"
+        else
+            echo -e "  ${YELLOW}SKIP${NC}: check-safehouse-socket.sh --json parse check (python3 not installed)"
+        fi
+    else
+        echo -e "  ${YELLOW}SKIP${NC}: check-safehouse-socket.sh fixture-repo tests (jq not installed)"
+    fi
+
+    # 13e. No REPO_ROOT args, no workspace registry, cwd outside any repo:
+    # a clean no-op (exit 0), never a false DRIFT.
+    _no_registry_out="$(cd /tmp && "${_drift_env[@]}" LOOM_WORKSPACES_PATH=/nonexistent-registry.json "$DRIFT_SCRIPT" 2>&1)"
+    _rc_no_registry=$?
+    assert_contains "nothing to check" "$_no_registry_out" \
+        "check-safehouse-socket.sh: no registry + no enclosing repo is a clean no-op"
+    assert_eq "0" "$_rc_no_registry" \
+        "check-safehouse-socket.sh: no registry + no enclosing repo exits 0 (never a false DRIFT)"
+
+    rm -rf "$_drift_fixtures"
+else
+    echo -e "  ${YELLOW}SKIP${NC}: check-safehouse-socket.sh tests (script not found or not executable at $DRIFT_SCRIPT)"
 fi
 
 # ============================================================

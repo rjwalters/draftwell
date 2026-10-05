@@ -18,6 +18,12 @@
 #     concrete "loom update works outside a Loom source checkout" regression).
 #
 # Throwaway `mktemp -d` scratch per case, matching test-config-resolver.sh.
+#
+# Source-tree-only by design (#6194/#6241): scripts/loom and
+# scripts/install/provision-dispatcher.sh both live at the repo root, not
+# under defaults/, so neither is ever shipped into an installed consumer
+# repo. This suite SKIPs (exit 0) rather than errors when run outside
+# Loom's own checkout.
 
 set -uo pipefail
 
@@ -28,6 +34,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 DISPATCHER="$REPO_ROOT/scripts/loom"
 PROVISION_LIB="$REPO_ROOT/scripts/install/provision-dispatcher.sh"
 REAL_RESOLVER="$REPO_ROOT/defaults/scripts/lib/config-resolver.sh"
+REAL_SPAWN_WORKER="$REPO_ROOT/defaults/scripts/spawn-worker.sh"
+REAL_HARVEST_LIB="$REPO_ROOT/defaults/scripts/lib/daemon-env-harvest.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -50,8 +58,18 @@ assert_eq() {
     if [[ "$1" == "$2" ]]; then pass "$3"; else fail "$3 (expected '$2', got '$1')"; fi
 }
 
-[[ -f "$DISPATCHER" ]]    || { echo "dispatcher not found at $DISPATCHER"; exit 1; }
-[[ -f "$PROVISION_LIB" ]] || { echo "provisioning lib not found at $PROVISION_LIB"; exit 1; }
+if [[ ! -f "$DISPATCHER" ]]; then
+    echo "SKIP: source-tree-only test, $DISPATCHER not found (not shipped into an installed repo)" >&2
+    exit 0
+fi
+if [[ ! -f "$PROVISION_LIB" ]]; then
+    echo "SKIP: source-tree-only test, $PROVISION_LIB not found (not shipped into an installed repo)" >&2
+    exit 0
+fi
+
+# Pin the native dispatcher while leaving daemon-management mocks independent.
+source "$SCRIPT_DIR/lib/require-daemon-bin.sh"
+loom_test_require_daemon_bin --self-only "$REPO_ROOT/defaults/scripts" spawn-worker
 
 # Build a fake machine-level checkout with stub daemon-lifecycle scripts and a
 # real copy of the config resolver. Echoes the checkout path.
@@ -78,6 +96,28 @@ EOF
     printf '%s\n' "$c"
 }
 
+# Like make_checkout(), but ALSO ships a real copy of lib/daemon-env-harvest.sh
+# (#4581) and a loom-daemon-start.sh stub that echoes back the LOOM_WORK_FINDER
+# / LOOM_MAIN_HEALTH_GATE env it inherited — so a restart-fallback test can
+# assert the harvest-and-preserve pattern actually re-exported values from a
+# live plist/unit BEFORE this stub ran, not merely that the stub ran at all.
+make_checkout_with_harvest() {
+    local c; c="$(mktemp -d)"
+    mkdir -p "$c/defaults/scripts/cli" "$c/defaults/scripts/lib"
+    cat > "$c/defaults/scripts/cli/loom-daemon-start.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "STUB_START args=[$*] LOOM_WORK_FINDER=[${LOOM_WORK_FINDER:-}] LOOM_MAIN_HEALTH_GATE=[${LOOM_MAIN_HEALTH_GATE:-}]"
+EOF
+    cat > "$c/defaults/scripts/cli/loom-daemon-stop.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "STUB_STOP args=[$*]"
+EOF
+    chmod +x "$c/defaults/scripts/cli/"*.sh
+    cp "$REAL_RESOLVER" "$c/defaults/scripts/lib/config-resolver.sh"
+    cp "$REAL_HARVEST_LIB" "$c/defaults/scripts/lib/daemon-env-harvest.sh"
+    printf '%s\n' "$c"
+}
+
 # Build a fake consumer repo with a pool-manager stub + config tiers.
 make_consumer_repo() {
     local r; r="$(mktemp -d)"
@@ -87,6 +127,30 @@ make_consumer_repo() {
 echo "POOL_MANAGER args=[$*]"
 EOF
     chmod +x "$r/.loom/bin/loom"
+    printf '%s\n' "$r"
+}
+
+# Build a fake consumer repo whose .loom/scripts carries a REAL spawn-worker.sh
+# + its resolver libraries, plus stub spawn-<runtime>.sh runners that echo
+# their own name and argv (no real claude/codex, no live tokens).
+# Exercises `loom sweep`'s runtime routing (#4480).
+# Echoes the repo path.
+make_sweep_repo() {
+    local r; r="$(mktemp -d)"
+    mkdir -p "$r/.loom/scripts/lib"
+    cp "$REAL_SPAWN_WORKER" "$r/.loom/scripts/spawn-worker.sh"
+    cp "$REPO_ROOT/defaults/scripts/lib/"{locate-daemon-bin,loom-tools}.sh "$r/.loom/scripts/lib/"
+    # Stub runners: each announces which runtime ran and forwards its argv so a
+    # test can assert on both the selected runner and the passthrough flags.
+    cat > "$r/.loom/scripts/spawn-claude.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "STUB_CLAUDE argv=[$*]"
+EOF
+    cat > "$r/.loom/scripts/spawn-codex.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "STUB_CODEX argv=[$*]"
+EOF
+    chmod +x "$r/.loom/scripts/"spawn-*.sh
     printf '%s\n' "$r"
 }
 
@@ -332,9 +396,297 @@ assert_eq "$rc" "0" "'loom restart --machine' with no loom-daemon on PATH falls 
 assert_contains "$out" "STUB_STOP" "fallback invokes the stop delegate (no loom-daemon on PATH)"
 assert_contains "$out" "STUB_START" "fallback invokes the start delegate (no loom-daemon on PATH)"
 
+# ── #4581: bare-exec fallback harvests + re-exports the live plist/unit env ──
+echo "Test 16b: 'loom restart --machine' harvests + re-exports the live systemd unit's LOOM_* env before the bare-exec fallback (#4581)"
+CHK_HARVEST=$(make_checkout_with_harvest)
+HOME_HARVEST=$(mktemp -d)
+mkdir -p "$HOME_HARVEST/.config/systemd/user"
+cat > "$HOME_HARVEST/.config/systemd/user/loom-daemon.service" <<'EOF'
+[Service]
+Environment=LOOM_DAEMON_SUPERVISOR=systemd
+Environment=LOOM_WORK_FINDER=1
+Environment=LOOM_MAIN_HEALTH_GATE=1
+Environment=PATH=/opt/sentinel-4581/bin:/usr/bin:/bin
+EOF
+# Fake `uname` -> Linux so the systemd-gated harvest branch fires
+# deterministically regardless of the REAL host OS this suite happens to run
+# on (mirrors Test 16d's Darwin override below, in the opposite direction —
+# #5169). Without this, a real Darwin host takes scripts/loom's Darwin branch
+# unconditionally and never reads the systemd-unit fixture this test writes,
+# so the harvest finds nothing and every assertion below fails.
+FAKE_UNAME_LINUX_BIN=$(mktemp -d)
+cat > "$FAKE_UNAME_LINUX_BIN/uname" <<'EOF'
+#!/usr/bin/env bash
+echo "Linux"
+EOF
+chmod +x "$FAKE_UNAME_LINUX_BIN/uname"
+set +e
+out=$(cd "$CONSUMER" && PATH="$FAKE_UNAME_LINUX_BIN:/usr/bin:/bin" HOME="$HOME_HARVEST" LOOM_HOME="$CHK_HARVEST" bash "$DISPATCHER" restart --machine 2>&1)
+rc=$?
+set -e 2>/dev/null || true
+assert_eq "$rc" "0" "harvest-and-preserve restart fallback still exits 0"
+assert_contains "$out" "LOOM_WORK_FINDER=[1]" "harvested LOOM_WORK_FINDER reaches start_target's re-render (#4581)"
+assert_contains "$out" "LOOM_MAIN_HEALTH_GATE=[1]" "harvested LOOM_MAIN_HEALTH_GATE reaches start_target's re-render (#4581)"
+assert_contains "$out" "preserved 2 LOOM_*/token env var(s)" "dispatcher reports the harvested count"
+
+echo "Test 16c: 'loom restart --machine' skips harvesting (no-op) when no plist/unit is installed yet (first-ever start, #4581)"
+CHK_HARVEST_EMPTY=$(make_checkout_with_harvest)
+HOME_EMPTY=$(mktemp -d)
+set +e
+out=$(cd "$CONSUMER" && PATH="/usr/bin:/bin" HOME="$HOME_EMPTY" LOOM_HOME="$CHK_HARVEST_EMPTY" bash "$DISPATCHER" restart --machine 2>&1)
+rc=$?
+set -e 2>/dev/null || true
+assert_eq "$rc" "0" "restart fallback with nothing installed yet still exits 0"
+assert_contains "$out" "STUB_START" "fallback still reaches start_target with nothing to harvest"
+assert_not_contains "$out" "preserved" "no harvest-preserved message when no plist/unit exists"
+
+echo "Test 16d: 'loom restart --machine' aborts (exit 6) rather than falling back silently when a live plist exists but cannot be read (#4581, the #4011 class)"
+CHK_HARVEST_BAD=$(make_checkout_with_harvest)
+HOME_DARWIN=$(mktemp -d)
+mkdir -p "$HOME_DARWIN/Library/LaunchAgents"
+echo "not a real plist" > "$HOME_DARWIN/Library/LaunchAgents/com.rjwalters.loom-daemon.plist"
+# Fake `uname` -> Darwin so the launchd-gated harvest branch fires
+# deterministically on any host (mirrors test-loom-daemon-update.sh's
+# write_fake_launchd_loaded_bin pattern). `plutil` is genuinely absent on this
+# (Linux) test host, which is exactly the "cannot harvest" failure this test
+# exercises — no plutil stub needed.
+FAKE_UNAME_BIN=$(mktemp -d)
+cat > "$FAKE_UNAME_BIN/uname" <<'EOF'
+#!/usr/bin/env bash
+echo "Darwin"
+EOF
+chmod +x "$FAKE_UNAME_BIN/uname"
+set +e
+out=$(cd "$CONSUMER" && PATH="$FAKE_UNAME_BIN:/usr/bin:/bin" HOME="$HOME_DARWIN" LOOM_HOME="$CHK_HARVEST_BAD" bash "$DISPATCHER" restart --machine 2>&1)
+rc=$?
+set -e 2>/dev/null || true
+assert_eq "$rc" "6" "restart fallback aborts (exit 6) when the live plist cannot be parsed"
+assert_contains "$out" "Refusing to fall back" "abort message explains the refusal"
+assert_not_contains "$out" "STUB_START" "aborted fallback never reaches start_target (no silently-narrowed relaunch)"
+
+# Test 16d only covers the UNREADABLE-plist abort path. The happy-path launchd
+# harvest (a real, parseable plist -> re-exported env reaching start_target's
+# re-render) had no coverage anywhere — #5169. Needs a REAL `plutil` + `jq` to
+# exercise harvest_plist_env's actual parse path (a hand-rolled parser would
+# test the test, not the production code), so this mirrors
+# test-loom-daemon-update.sh's scenario-21/22 guard: skip on a host without
+# plutil (i.e. every Linux CI runner) rather than fail on a genuinely
+# macOS-only dependency.
+#
+# #6454 (same hazard class as #6386): scripts/loom's restart verb
+# (loom_cmd_restart) runs `command -v loom-daemon && loom-daemon restart`
+# BEFORE it ever reaches the fully-stubbed stop/start fallback below. Unlike
+# 16b/16c/16d (whose PATH is a tight `/usr/bin:/bin` or Linux-only sandbox),
+# this test previously kept the FULL ambient $PATH on PATH (`"$FAKE_UNAME_BIN2:$PATH"`)
+# so the real `plutil`/`jq` stayed reachable for harvest_plist_env's actual
+# parse path — but on a host where the real production `loom-daemon` binary
+# is ALSO reachable on that ambient PATH (any provisioned fleet host), that
+# resolves to the REAL binary. Its restart-CLI preflight
+# (launchd_env_drift::check_launchd_env_drift, then
+# restart_verify::probe_host_supervisor -> pre_restart_pid) shells out to the
+# REAL `launchctl print gui/<uid>/<label>` using `LOOM_LAUNCHD_LABEL` (default:
+# the literal production label `com.rjwalters.loom-daemon`) — entirely
+# independent of this test's faked $HOME/LOOM_HOME, which only scope the
+# *file* harvest_plist_env reads, not launchctl's OS-session-level label
+# lookup. Two fixes, both applied:
+#   1. A scratch LOOM_LAUNCHD_LABEL (lib/launchd-sandbox.sh's
+#      launchd_sandbox_new_label, the same pattern test-live-state-sandbox.sh
+#      and the daemon-lifecycle suites already use) so ANY launchctl call
+#      this reaches targets a harmless nonexistent scratch job instead of the
+#      real production one, and so the fixture plist is written/read under
+#      that same scratch label consistently.
+#   2. A PATH built from ONLY the fake-uname dir, private symlinks to the
+#      real `plutil`/`jq` binaries (never their whole containing directory,
+#      which could coincidentally also hold a real `loom-daemon`), and the
+#      standard `/usr/bin:/bin` (mirroring 16b/16c/16d) — never the ambient
+#      $PATH — so `command -v loom-daemon` can never resolve to a real
+#      binary and the dispatcher always takes its fully-stubbed
+#      stop-then-start fallback.
+if command -v plutil >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+    echo "Test 16f: 'loom restart --machine' harvests + re-exports a real, readable launchd plist's LOOM_* env before the bare-exec fallback (#4581 happy path)"
+    CHK_HARVEST_GOOD=$(make_checkout_with_harvest)
+    HOME_LAUNCHD_GOOD=$(mktemp -d)
+    mkdir -p "$HOME_LAUNCHD_GOOD/Library/LaunchAgents"
+    # shellcheck source=lib/launchd-sandbox.sh
+    source "$SCRIPT_DIR/lib/launchd-sandbox.sh"
+    LABEL_16F="$(launchd_sandbox_new_label)"
+    cat > "$HOME_LAUNCHD_GOOD/Library/LaunchAgents/${LABEL_16F}.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LABEL_16F}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>LOOM_DAEMON_SUPERVISOR</key>
+        <string>launchd</string>
+        <key>LOOM_WORK_FINDER</key>
+        <string>1</string>
+        <key>LOOM_MAIN_HEALTH_GATE</key>
+        <string>1</string>
+        <key>PATH</key>
+        <string>/opt/sentinel-4581/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
+EOF
+    # Fake `uname` -> Darwin so the launchd-gated harvest branch fires
+    # deterministically regardless of the real host OS (same pattern as Test
+    # 16d/16b).
+    FAKE_UNAME_BIN2=$(mktemp -d)
+    cat > "$FAKE_UNAME_BIN2/uname" <<'EOF'
+#!/usr/bin/env bash
+echo "Darwin"
+EOF
+    chmod +x "$FAKE_UNAME_BIN2/uname"
+    # Private symlinks to the real plutil/jq (never their containing
+    # directory — see the block comment above) so harvest_plist_env's actual
+    # parse path still runs against the real tools without widening PATH to
+    # anything that could resolve a real `loom-daemon`.
+    SAFE_BIN_16F=$(mktemp -d)
+    ln -s "$(command -v plutil)" "$SAFE_BIN_16F/plutil"
+    ln -s "$(command -v jq)" "$SAFE_BIN_16F/jq"
+    set +e
+    out=$(cd "$CONSUMER" && PATH="$FAKE_UNAME_BIN2:$SAFE_BIN_16F:/usr/bin:/bin" HOME="$HOME_LAUNCHD_GOOD" LOOM_HOME="$CHK_HARVEST_GOOD" LOOM_LAUNCHD_LABEL="$LABEL_16F" bash "$DISPATCHER" restart --machine 2>&1)
+    rc=$?
+    set -e 2>/dev/null || true
+    assert_eq "$rc" "0" "harvest-and-preserve restart fallback from a real launchd plist still exits 0"
+    assert_contains "$out" "LOOM_WORK_FINDER=[1]" "harvested LOOM_WORK_FINDER from a real plist reaches start_target's re-render"
+    assert_contains "$out" "LOOM_MAIN_HEALTH_GATE=[1]" "harvested LOOM_MAIN_HEALTH_GATE from a real plist reaches start_target's re-render"
+    assert_contains "$out" "preserved 2 LOOM_*/token env var(s)" "dispatcher reports the harvested count (real plist)"
+else
+    echo "Test 16f: SKIP (plutil and/or jq not on PATH — harvest_plist_env is a macOS-only production path)"
+fi
+
+echo "Test 16e: 'loom restart --machine' still falls back cleanly when this checkout predates daemon-env-harvest.sh (#4581 backward-compat)"
+CHK_NO_HARVEST_LIB=$(make_checkout)
+set +e
+out=$(cd "$CONSUMER" && PATH="/usr/bin:/bin" LOOM_HOME="$CHK_NO_HARVEST_LIB" bash "$DISPATCHER" restart --machine 2>&1)
+rc=$?
+set -e 2>/dev/null || true
+assert_eq "$rc" "0" "restart fallback exits 0 even when daemon-env-harvest.sh is absent from the checkout"
+assert_contains "$out" "daemon-env-harvest.sh not found" "missing-lib warning is surfaced, not silently swallowed"
+assert_contains "$out" "STUB_START" "fallback still reaches start_target when the harvest lib predates #4581"
+
 echo "Test 17: 'restart' is documented in help output"
 help_out=$(LOOM_HOME="$CHK" bash "$DISPATCHER" help 2>&1)
 assert_contains "$help_out" "restart" "'loom help' documents the restart verb"
+
+echo "Test 18: 'migrate' verb routing (Epic #3835 Phase 6, #4254)"
+# The real checkout ships scripts/install/migrate-consumer.sh; stub it into the
+# fake checkout so the dispatcher's target resolution finds it.
+mkdir -p "$CHK/scripts/install"
+cat > "$CHK/scripts/install/migrate-consumer.sh" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--help" ]]; then echo "MIGRATE_HELP"; exit 0; fi
+echo "MIGRATE args=[$*] machine_checkout=[${LOOM_MACHINE_CHECKOUT:-}]"
+EOF
+chmod +x "$CHK/scripts/install/migrate-consumer.sh"
+
+assert_contains "$help_out" "migrate" "'loom help' documents the migrate verb"
+
+# --help is reachable from a non-repo directory (no .loom/ context needed).
+migrate_help=$(cd "$(mktemp -d)" && LOOM_HOME="$CHK" bash "$DISPATCHER" migrate --help 2>&1)
+assert_contains "$migrate_help" "MIGRATE_HELP" "'loom migrate --help' delegates without a repo context"
+
+# Outside a Loom repo, 'migrate' refuses with a clear message.
+migrate_norepo=$(cd "$(mktemp -d)" && LOOM_HOME="$CHK" bash "$DISPATCHER" migrate 2>&1 || true)
+assert_contains "$migrate_norepo" "must run inside a Loom consumer repo" "'loom migrate' refuses outside a repo"
+
+# Inside a consumer repo, 'migrate' delegates with the repo root + machine checkout.
+MIGREPO="$(make_consumer_repo)"
+migrate_run=$(cd "$MIGREPO" && LOOM_HOME="$CHK" bash "$DISPATCHER" migrate --dry-run 2>&1 || true)
+assert_contains "$migrate_run" "MIGRATE args=" "'loom migrate' delegates to migrate-consumer.sh"
+assert_contains "$migrate_run" "machine_checkout=[$CHK]" "'loom migrate' hands off LOOM_MACHINE_CHECKOUT"
+
+# ── #4480: `loom sweep` is runtime-neutral (routes through spawn-worker.sh) ───
+echo "Test 19: 'loom sweep' default path (no env, no config) routes to spawn-claude.sh unchanged"
+SWEEPREPO="$(make_sweep_repo)"
+set +e
+out=$(cd "$SWEEPREPO" && env -u LOOM_RUNTIME -u LOOM_WORKSPACE LOOM_CONFIG_DEFAULTS_FILE="" LOOM_HOME="$CHK" bash "$DISPATCHER" sweep 4467 2>&1)
+rc=$?
+set -e 2>/dev/null || true
+assert_eq "$rc" "0" "'loom sweep' default path exits 0"
+assert_contains "$out" "STUB_CLAUDE" "default (no env/config) resolves to spawn-claude.sh"
+assert_not_contains "$out" "STUB_CODEX" "default path does not touch the codex runner"
+assert_contains "$out" 'argv=[-p /loom:sweep 4467 --dangerously-skip-permissions]' "default path forwards the same claude args as before (byte-for-byte)"
+
+echo "Test 20: 'LOOM_RUNTIME=codex loom sweep' routes to spawn-codex.sh"
+# Hermeticity (#8859): this test asserts the *dispatcher's* runtime routing, so it
+# must not also be running runtime_admission's role gate. `codex` is the one legacy
+# adapter that calls resolve_and_admit when LOOM_ROLE is non-empty
+# (worker_spawn/mod.rs) — and every daemon-launched shell carries one (a Builder
+# running build-gate.sh carries LOOM_ROLE=sweep-lifecycle, which binds to Builder's
+# requirements). Builder requires worktreeIsolation, defaults/runtimes/codex.json
+# still declares it "partial", so the ambient role alone makes this exit 78 before
+# spawn-codex.sh is ever reached. LOOM_WORKSPACE must go too: worker_spawn::workspace()
+# prefers it over the fixture, so an ambient one silently re-roots admission at the
+# real checkout instead of $SWEEPREPO. Same `env -u LOOM_ROLE` shape as Test 22.
+set +e
+out=$(cd "$SWEEPREPO" && env -u LOOM_ROLE -u LOOM_WORKSPACE LOOM_RUNTIME=codex LOOM_CONFIG_DEFAULTS_FILE="" LOOM_HOME="$CHK" bash "$DISPATCHER" sweep 4467 2>&1)
+rc=$?
+set -e 2>/dev/null || true
+assert_eq "$rc" "0" "'LOOM_RUNTIME=codex loom sweep' exits 0"
+assert_contains "$out" "STUB_CODEX" "LOOM_RUNTIME=codex resolves to spawn-codex.sh"
+assert_not_contains "$out" "STUB_CLAUDE" "codex env path does not touch the claude runner"
+assert_contains "$out" 'argv=[-p /loom:sweep 4467 --dangerously-skip-permissions]' "codex path forwards the same passthrough args"
+
+if command -v jq >/dev/null 2>&1; then
+    echo "Test 21: 'loom sweep' honors .loom/config.json runtimes.default (no env)"
+    SWEEPCFG="$(make_sweep_repo)"
+    echo '{"runtimes":{"default":"codex"}}' > "$SWEEPCFG/.loom/config.json"
+    # `-u LOOM_ROLE` for the same reason as Test 20 (#8859): this is also a codex
+    # route, so an ambient role runs the admission gate against a fixture that ships
+    # no defaults/roles/*.json at all — "role manifest .../builder.json: No such
+    # file or directory", exit 78, before spawn-codex.sh is reached.
+    set +e
+    out=$(cd "$SWEEPCFG" && env -u LOOM_RUNTIME -u LOOM_ROLE -u LOOM_WORKSPACE LOOM_CONFIG_DEFAULTS_FILE="" LOOM_HOME="$CHK" bash "$DISPATCHER" sweep 4467 2>&1)
+    rc=$?
+    set -e 2>/dev/null || true
+    assert_eq "$rc" "0" "'loom sweep' with runtimes.default=codex exits 0"
+    assert_contains "$out" "STUB_CODEX" "runtimes.default=codex (no env) resolves to spawn-codex.sh"
+    assert_not_contains "$out" "STUB_CLAUDE" "config-selected codex path does not touch the claude runner"
+else
+    echo "Test 21: SKIP (jq not on PATH)"
+fi
+
+echo "Test 22: 'loom sweep' with an unknown runtime exits 78 naming runtime, source, and runners present"
+# Pin the bare-env resolution tier this test's wording assertion describes
+# (#8430): an inherited LOOM_ROLE (every daemon-launched shell — a Builder
+# running build-gate.sh carries LOOM_ROLE=sweep-lifecycle) reroutes
+# spawn-worker through runtime_admission's role binding, which renders the
+# same LOOM_RUNTIME var as the RuntimeSource label "global-environment"
+# instead of the dispatcher-era label "env (LOOM_RUNTIME)" asserted below.
+set +e
+out=$(cd "$SWEEPREPO" && env -u LOOM_ROLE LOOM_RUNTIME=nonexistent LOOM_CONFIG_DEFAULTS_FILE="" LOOM_HOME="$CHK" bash "$DISPATCHER" sweep 4467 2>&1)
+rc=$?
+set -e 2>/dev/null || true
+assert_eq "$rc" "78" "unknown runtime exits 78 (EX_CONFIG)"
+assert_contains "$out" "nonexistent" "error names the resolved runtime"
+assert_contains "$out" "env (LOOM_RUNTIME)" "error names where the runtime was resolved from"
+assert_contains "$out" "claude" "error lists the runners actually present on disk"
+assert_not_contains "$out" "STUB_CLAUDE" "unknown runtime never falls through to a runner"
+
+echo "Test 23: 'loom sweep' still refuses outside a Loom repo and with no issue arg (unchanged)"
+NRSWEEP=$(mktemp -d)
+set +e
+out=$(cd "$NRSWEEP" && LOOM_HOME="$CHK" bash "$DISPATCHER" sweep 4467 2>&1)
+rc=$?
+set -e 2>/dev/null || true
+assert_eq "$rc" "1" "'loom sweep' outside a Loom repo exits 1"
+assert_contains "$out" "must run inside a Loom repo" "'loom sweep' outside a repo keeps the existing message"
+
+set +e
+out=$(cd "$SWEEPREPO" && LOOM_HOME="$CHK" bash "$DISPATCHER" sweep 2>&1)
+rc=$?
+set -e 2>/dev/null || true
+assert_eq "$rc" "1" "'loom sweep' with no issue arg exits 1"
+assert_contains "$out" "usage: loom sweep" "'loom sweep' with no arg keeps the existing usage message"
+
+echo "Test 24: 'loom sweep' no longer hardcodes a Claude-only prerequisite gate (#4480)"
+src="$(cat "$DISPATCHER")"
+assert_not_contains "$src" "'claude' CLI not found on PATH; cannot dispatch a sweep." "the Claude-only prereq gate was removed from sweep"
 
 echo ""
 echo "======================================"

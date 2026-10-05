@@ -56,9 +56,13 @@ WORKTREE_ABS="$(cd .loom/worktrees/issue-84 && pwd)"
 #    - Bash:       git -C "$WORKTREE_ABS" ...  OR  cd "$WORKTREE_ABS" && <cmd>
 # ... work work work ...
 
-# 5. Push and create PR from the worktree
+# 5. Push and create PR from the worktree.
+#    ALWAYS ./.loom/scripts/create-pr.sh, never a bare `gh pr create` (#6074):
+#    it adopts an already-open PR for this branch instead of failing, and it
+#    survives the GitHub App permission window that made `git push` succeed
+#    while `gh pr create` returned 403 — see builder-pr.md § "Creating the PR".
 git -C "$WORKTREE_ABS" push -u origin feature/issue-84
-gh pr create --label "loom:review-requested"
+./.loom/scripts/create-pr.sh --title "fix: ..." --body "..." --label "loom:review-requested"
 
 # 6. Worktree cleanup is automatic - DO NOT manually delete worktrees
 # Worktrees are cleaned up automatically when PRs merge or by loom-clean
@@ -146,6 +150,19 @@ git add <resolved-files>
 # 3. Continue the rebase
 git rebase --continue
 
+# Version-bearing-file sync gate (#7168, #7341; moot after #7743): if you push
+# here directly (updating an already-open PR) rather than through create-pr.sh
+# again, gate first. Under #7743 no PR carries a version-bearing edit, so a
+# clean rebase lands exactly origin/main's values; if the gate still fires,
+# your branch carries one (e.g. a pre-#7743 bump commit).
+# Never hand-patch VERSION/CLAUDE.md/etc. and never run `version.sh bump` (the
+# printed Fix: predates #7743) -- restore them to origin/main's values
+# (`git checkout origin/main -- <files>`), commit, re-run the gate, then push.
+if [ -x ./.loom/scripts/version-check-gate.sh ] && ! ./.loom/scripts/version-check-gate.sh --fix-hint "then push."; then
+  echo "Version-bearing files out of sync after rebase (see BLOCKER:/Fix: above) - revert, never bump"
+  exit 1
+fi
+
 # 4. Force push (rebase rewrites history)
 git push --force-with-lease
 ```
@@ -205,9 +222,33 @@ cd .loom/worktrees/issue-XX
 - Always use `./.loom/scripts/worktree.sh` to create branches
 - Prevents nested worktree issues
 
-**Don't run `git stash` in main and try to apply in worktrees**
-- Stash is local to the repository, not shared between worktrees
-- Each worktree has its own working directory
+**Don't use `git stash` for ad-hoc WIP handling in a worktree**
+- Stash (`refs/stash`) is **shared repo-wide across every linked worktree** —
+  the opposite of per-worktree isolation. Two parallel builders in different
+  worktrees can `git stash` and `git stash pop` each other's WIP, silently
+  swapping or overwriting uncommitted work (observed in production: kicad-tools
+  PRs #4524/#4526).
+- Use `./.loom/scripts/worktree.sh snapshot <issue-number>` instead — it
+  captures WIP as a patch file under
+  `<worktree-root>/.snapshots/issue-<N>-<timestamp>.patch`, scoped to your own
+  worktree, with no risk of collision with other builders' stashes.
+- For a "clean baseline vs. my diff" comparison — temporarily clearing your
+  fix to re-run a lint/test baseline, then restoring it — `snapshot` is *not*
+  enough (it captures a patch but does not reset the working tree). Use
+  `./.loom/scripts/worktree.sh stash-push <issue-number>`, run the baseline
+  check, then `./.loom/scripts/worktree.sh stash-pop <issue-number>` (#5217).
+  It anchors your WIP to a **per-issue** ref
+  (`refs/loom/stash-baseline/issue-<N>`), never `refs/stash`, so no concurrent
+  builder's stash can land between your push and pop.
+
+**Don't leave a detached process running after your session ends**
+- It outlives the sweep, holds files open in a worktree that is auto-removed on
+  merge, and loads the host with work no owner can be found for.
+- **Never `launchctl submit`**: its jobs are **KeepAlive**, so launchd re-runs a
+  one-shot script every time it exits, forever (#8478: 25 orphaned `ngspice`,
+  load 58, 12h of suppressed dispatch).
+- Long compute → the repo's batch backend, or scoped to fit the session, or
+  `loom:blocked` naming the compute gap: `.loom/docs/long-running-compute.md`.
 
 **Don't use `git push --force` without `--force-with-lease`**
 - `--force-with-lease` is safer - it fails if someone else pushed
@@ -227,12 +268,10 @@ To minimize conflicts in the first place:
 
 3. **Communicate**: If working on shared areas, coordinate with other builders
 
-4. **Rebase before PR**: Always rebase onto latest main before creating PR
-   ```bash
-   git fetch origin main
-   git rebase origin/main
-   git push --force-with-lease
-   ```
+4. **Rebase before PR**: this is a required gate, not just an ounce-of-prevention
+   habit — see `builder-pr.md` § "Pre-Push Rebase: Sync with `origin/main`" for
+   the mandatory step (with conflict-handling instructions) that runs
+   immediately before `git push` / opening the PR (#7668).
 
 ## Claiming Workflow (Parallel Mode)
 
@@ -249,6 +288,12 @@ When working with parallel agents (multiple Builders running simultaneously), us
 - Use `loom-claim` for atomic file-based locking
 - Label change is still needed (for visibility), but loom-claim prevents races
 - First Builder to claim wins; others move to next issue
+
+> `loom-claim` is a PATH shim over `loom-daemon claim` (issue #4275 ported the
+> implementation from Python to native Rust). The command name, positional
+> grammar and exit codes below are unchanged, and the shim needs no pip install
+> — it is provisioned next to the `loom-daemon` binary. The `command -v
+> loom-claim` degradation guard below still applies unchanged.
 
 ### Claiming Workflow
 
@@ -305,7 +350,7 @@ while true; do
   fi
 
   # Find available issues
-  ISSUES=$(gh issue list --label="loom:issue" --state=open --json number --jq '.[].number')
+  ISSUES=$(gh issue list --label="loom:issue" --state=open --limit 500 --json number --jq '.[].number')
 
   for ISSUE_NUMBER in $ISSUES; do
     # Try atomic claim
