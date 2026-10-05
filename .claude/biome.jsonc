@@ -26,7 +26,12 @@
       "!biome.jsonc",
       "!settings.json",
       "!agents",
-      "!commands/loom"
+      "!commands/loom",
+      // Local addition (pinned in .loom/resync-ignore): Repo Skills is also
+      // tool-managed, and its installer writes 2-space JSON that this nested
+      // config (Biome's tab default, not the root biome.json) would reject.
+      "!commands/repo",
+      "!skills/repo"
     ]
   }
 }
