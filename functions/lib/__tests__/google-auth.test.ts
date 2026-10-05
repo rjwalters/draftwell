@@ -296,7 +296,10 @@ describe("handleGoogleCallback", () => {
 });
 
 describe("handleLogin — Google-only account guard", () => {
-  it("returns 401 (not 500) when the account has a null password_hash", async () => {
+  it.each([
+    ["empty", ""],
+    ["null", null],
+  ])("returns 401 (not 500) when the account has a %s password_hash", async (_, passwordHash) => {
     const db = {
       prepare() {
         const stmt = {
@@ -308,7 +311,7 @@ describe("handleLogin — Google-only account guard", () => {
               id: "google-user-1",
               email: "user@example.com",
               name: "Test User",
-              password_hash: null,
+              password_hash: passwordHash,
               created_at: "2024-01-01",
             };
           },
