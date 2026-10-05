@@ -222,6 +222,9 @@ async function resolveUser(env: Env, input: ResolveInput): Promise<string | null
   }
 
   // 3. No match → create a new (passwordless) user and link the identity.
+  // password_hash is '' rather than NULL: the column is NOT NULL on databases
+  // migrated with the current 0003_google_oauth.sql (see the note there), and
+  // handleLogin rejects any falsy hash.
   const newUserId = crypto.randomUUID();
   const displayName = name?.trim() || email.split("@")[0];
 

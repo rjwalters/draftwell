@@ -59,6 +59,12 @@ MANIFEST_VERSION=2
 LOOM_SECTION_START='<!-- BEGIN LOOM ORCHESTRATION -->'
 LOOM_SECTION_END='<!-- END LOOM ORCHESTRATION -->'
 
+# Loom section markers in the top-level AGENTS.md (mirrors
+# loom-daemon/src/init/scaffolding.rs AGENTS_SECTION_START / AGENTS_SECTION_END).
+# A separate marker pair so CLAUDE.md and AGENTS.md regions never collide (#4479).
+AGENTS_SECTION_START='<!-- BEGIN LOOM ORCHESTRATION (AGENTS) -->'
+AGENTS_SECTION_END='<!-- END LOOM ORCHESTRATION (AGENTS) -->'
+
 # Find the repository root (works from worktrees and subdirectories)
 find_repo_root() {
     local dir="$PWD"
@@ -120,10 +126,15 @@ ${BOLD}TRACKED FILE SET:${NC}
     metadata file is absent (pre-#3450 installs), a legacy directory
     walk is used instead, with a stderr warning.
 
-    The top-level CLAUDE.md is hashed over its
+    The top-level CLAUDE.md and AGENTS.md are hashed over their
     ${LOOM_SECTION_START} ... ${LOOM_SECTION_END}
-    region only, so sibling edits outside the Loom block do not report
-    drift. All other files are hashed whole.
+    (and the AGENTS-specific) marker region only, so sibling edits outside
+    the Loom block do not report drift. All other files are hashed whole.
+
+    verify mode also asserts each region-scoped file's BEGIN/END marker
+    pair is well-formed (exactly one of each, in order) independent of the
+    hash comparison, so a missing, duplicated, or malformed marker pair is
+    always flagged -- even one baked into the manifest at generate time.
 
 ${BOLD}NOT TRACKED (runtime/user/merge-target files):${NC}
     .loom/config.json              Local terminal config
@@ -137,7 +148,7 @@ ${BOLD}NOT TRACKED (runtime/user/merge-target files):${NC}
 
 ${BOLD}EXIT CODES:${NC}
     0    generate succeeded, or verify found no drift
-    1    verify found modified or missing files
+    1    verify found modified, missing, or marker-malformed files
     2    Invalid arguments
     3    Manifest not found (verify mode)
     4    Environment error (not a git repo, no SHA command)
@@ -160,12 +171,16 @@ ${BOLD}EXAMPLES:${NC}
 EOF
 }
 
-# Return "loom-block" for the top-level CLAUDE.md (region-scoped hashing),
-# empty string for every other path (whole-file hashing). Only the repo-root
-# CLAUDE.md is a merge target; .loom/CLAUDE.md is fully Loom-owned.
+# Return the region-scoped-hashing tag for merge-target root docs, empty string
+# for every other path (whole-file hashing). Only the repo-root CLAUDE.md and
+# AGENTS.md are merge targets (their Loom-managed marker block is hashed, so
+# consumer edits outside it don't report drift); .loom/CLAUDE.md and
+# .loom/AGENTS.md are fully Loom-owned and hashed whole (#4479).
 region_for_path() {
     if [[ "$1" == "CLAUDE.md" ]]; then
         echo "loom-block"
+    elif [[ "$1" == "AGENTS.md" ]]; then
+        echo "loom-block-agents"
     else
         echo ""
     fi
@@ -276,8 +291,14 @@ collect_tracked_files_walk() {
     if [[ -f "$root/CLAUDE.md" ]]; then
         files+=("CLAUDE.md")
     fi
+    if [[ -f "$root/AGENTS.md" ]]; then
+        files+=("AGENTS.md")
+    fi
     if [[ -f "$root/.loom/CLAUDE.md" ]]; then
         files+=(".loom/CLAUDE.md")
+    fi
+    if [[ -f "$root/.loom/AGENTS.md" ]]; then
+        files+=(".loom/AGENTS.md")
     fi
     if [[ -f "$root/.loom/README.md" ]]; then
         files+=(".loom/README.md")
@@ -473,12 +494,15 @@ cmd_check_links() {
 
 # Emit the hashable bytes for an entry to stdout, honoring region rules.
 # For region "loom-block", emit only the CLAUDE.md Loom marker region
-# (inclusive). For whole-file entries, cat the file verbatim.
+# (inclusive); for "loom-block-agents", the AGENTS.md marker region. For
+# whole-file entries, cat the file verbatim.
 emit_hashable_content() {
     local full_path="$1"
     local region="$2"
     if [[ "$region" == "loom-block" ]]; then
         sed -n "/${LOOM_SECTION_START}/,/${LOOM_SECTION_END}/p" "$full_path"
+    elif [[ "$region" == "loom-block-agents" ]]; then
+        sed -n "/${AGENTS_SECTION_START}/,/${AGENTS_SECTION_END}/p" "$full_path"
     else
         cat "$full_path"
     fi
@@ -492,7 +516,7 @@ compute_entry_digest() {
     local full_path="$1"
     local region="$2"
     local sha size
-    if [[ "$region" == "loom-block" ]]; then
+    if [[ -n "$region" ]]; then
         local block
         block=$(emit_hashable_content "$full_path" "$region")
         sha=$(printf '%s' "$block" | $SHA_CMD | awk '{print $1}')
@@ -504,6 +528,63 @@ compute_entry_digest() {
     # Trailing newline is required: callers use `read`, which returns non-zero
     # on EOF-without-newline and would abort under `set -e`.
     printf '%s %s\n' "$sha" "$size"
+}
+
+# Return "<BEGIN>\t<END>" for a region name, or empty for an unrecognized one.
+# Single source of truth for the region->marker-pair mapping, shared by
+# emit_hashable_content (implicitly, via the two branches above) and
+# check_marker_integrity below.
+markers_for_region() {
+    case "$1" in
+        loom-block) printf '%s\t%s\n' "$LOOM_SECTION_START" "$LOOM_SECTION_END" ;;
+        loom-block-agents) printf '%s\t%s\n' "$AGENTS_SECTION_START" "$AGENTS_SECTION_END" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Assert a managed marker block is well-formed: exactly one BEGIN and one END
+# marker, BEGIN preceding END. This is deliberately INDEPENDENT of hash-based
+# drift detection (issue #6195): a file whose markers are already missing,
+# duplicated, or out of order at `generate` time bakes that malformed
+# extraction into the manifest's recorded hash, so a hash-only comparison can
+# never flag it -- every later `verify` against the same still-malformed file
+# reports a clean match. Running this structural check against the current
+# on-disk file every time closes that gap. Prints nothing on success; prints a
+# one-line problem description on failure. Returns 0/1 accordingly.
+check_marker_integrity() {
+    local full_path="$1"
+    local begin="$2"
+    local end="$3"
+
+    local begin_count end_count
+    begin_count=$(grep -Fc -- "$begin" "$full_path" 2>/dev/null || true)
+    end_count=$(grep -Fc -- "$end" "$full_path" 2>/dev/null || true)
+    begin_count=${begin_count:-0}
+    end_count=${end_count:-0}
+
+    if [[ "$begin_count" -eq 0 && "$end_count" -eq 0 ]]; then
+        echo "missing marker block (no BEGIN or END marker found)"
+        return 1
+    elif [[ "$begin_count" -eq 0 ]]; then
+        echo "missing BEGIN marker (END marker present with no matching BEGIN)"
+        return 1
+    elif [[ "$end_count" -eq 0 ]]; then
+        echo "missing END marker (BEGIN marker present with no matching END)"
+        return 1
+    elif [[ "$begin_count" -gt 1 || "$end_count" -gt 1 ]]; then
+        echo "duplicated marker(s) (${begin_count}x BEGIN, ${end_count}x END -- expected exactly 1 of each)"
+        return 1
+    fi
+
+    local begin_line end_line
+    begin_line=$(grep -Fn -- "$begin" "$full_path" | head -1 | cut -d: -f1)
+    end_line=$(grep -Fn -- "$end" "$full_path" | head -1 | cut -d: -f1)
+    if [[ "$begin_line" -ge "$end_line" ]]; then
+        echo "malformed order (END marker at line $end_line appears at or before BEGIN marker at line $begin_line)"
+        return 1
+    fi
+
+    return 0
 }
 
 # Generate manifest
@@ -535,13 +616,18 @@ cmd_generate() {
     local generated_at
     generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    # Detect loom version from CLAUDE.md and commit from install-metadata.json
+    # Detect loom version and commit from install-metadata.json — the
+    # authoritative, non-prompt-injected record of what is installed. Before
+    # #8147 the version was read out of root CLAUDE.md's `**Loom Version**`
+    # header; that header no longer exists (a per-release token in a
+    # prompt-prefix-injected file invalidated every agent's cached prefix on
+    # every bump), so install-metadata.json is the only source now. It is
+    # written at install time and refreshed by resync-installed.sh, so it is
+    # also fresher than the header ever was.
     local loom_version=""
     local loom_commit=""
-    if [[ -f "$root/CLAUDE.md" ]]; then
-        loom_version=$(grep -o 'Loom Version.*: .*' "$root/CLAUDE.md" | head -1 | sed 's/.*: //' | sed 's/\*//g' | tr -d '[:space:]' || true)
-    fi
     if [[ -f "$root/.loom/install-metadata.json" ]]; then
+        loom_version=$(grep -o '"loom_version": "[^"]*"' "$root/.loom/install-metadata.json" | head -1 | sed 's/.*: "//; s/"//' || true)
         loom_commit=$(grep -o '"loom_commit": "[^"]*"' "$root/.loom/install-metadata.json" | head -1 | sed 's/.*: "//; s/"//' || true)
     fi
 
@@ -671,6 +757,7 @@ cmd_verify() {
     local ok_count=0
     local modified_files=()
     local missing_files=()
+    local marker_integrity_failures=()
 
     # Get file paths from manifest
     local file_paths
@@ -693,6 +780,24 @@ cmd_verify() {
             continue
         fi
 
+        # Structural marker-integrity check (issue #6195). Independent of the
+        # hash comparisons below: a file whose markers were ALREADY missing,
+        # duplicated, or out of order when `generate` last ran bakes that
+        # malformed extraction into the recorded hash, so a hash-only
+        # comparison can never flag it on a later verify against the same
+        # still-malformed file. This runs against the current file every time,
+        # regardless of what the manifest recorded.
+        if [[ -n "$region" ]]; then
+            local region_markers region_begin region_end marker_problem
+            if region_markers=$(markers_for_region "$region" 2>/dev/null); then
+                IFS=$'\t' read -r region_begin region_end <<< "$region_markers"
+                marker_problem=""
+                if ! marker_problem=$(check_marker_integrity "$full_path" "$region_begin" "$region_end"); then
+                    marker_integrity_failures+=("$rel_path|$marker_problem")
+                fi
+            fi
+        fi
+
         # A region-scoped entry whose Loom marker block is now absent is real
         # drift (the block was removed), even though the file still exists.
         if [[ "$region" == "loom-block" ]] \
@@ -713,10 +818,11 @@ cmd_verify() {
 
     local modified_count=${#modified_files[@]}
     local missing_count=${#missing_files[@]}
+    local marker_integrity_count=${#marker_integrity_failures[@]}
     local status="ok"
     local exit_code=$EXIT_OK
 
-    if [[ $modified_count -gt 0 ]] || [[ $missing_count -gt 0 ]]; then
+    if [[ $modified_count -gt 0 ]] || [[ $missing_count -gt 0 ]] || [[ $marker_integrity_count -gt 0 ]]; then
         status="drift"
         exit_code=$EXIT_DRIFT
     fi
@@ -775,6 +881,27 @@ cmd_verify() {
                 done
                 printf '\n  '
             fi
+            printf '],\n'
+
+            # Marker-integrity failures array (issue #6195)
+            printf '  "marker_integrity": ['
+            if [[ $marker_integrity_count -gt 0 ]]; then
+                local first=true
+                for entry in "${marker_integrity_failures[@]}"; do
+                    IFS='|' read -r path problem <<< "$entry"
+                    if [[ "$first" == "true" ]]; then
+                        first=false
+                        printf '\n'
+                    else
+                        printf ',\n'
+                    fi
+                    printf '    {\n'
+                    printf '      "path": "%s",\n' "$path"
+                    printf '      "problem": "%s"\n' "$problem"
+                    printf '    }'
+                done
+                printf '\n  '
+            fi
             printf ']\n'
             printf '}\n'
             ;;
@@ -794,6 +921,9 @@ cmd_verify() {
             fi
             if [[ $missing_count -gt 0 ]]; then
                 echo -e "  MISSING:   ${RED}$missing_count files removed${NC}"
+            fi
+            if [[ $marker_integrity_count -gt 0 ]]; then
+                echo -e "  MARKERS:   ${RED}$marker_integrity_count managed-block marker issue(s)${NC}"
             fi
 
             if [[ $modified_count -gt 0 ]]; then
@@ -818,11 +948,22 @@ cmd_verify() {
                 done
             fi
 
+            if [[ $marker_integrity_count -gt 0 ]]; then
+                echo ""
+                echo "Managed-block marker issues:"
+                local entry
+                for entry in "${marker_integrity_failures[@]}"; do
+                    local path problem
+                    IFS='|' read -r path problem <<< "$entry"
+                    echo -e "  ${RED}$path${NC}: $problem"
+                done
+            fi
+
             echo ""
             if [[ "$status" == "ok" ]]; then
                 echo -e "Status: ${GREEN}ALL FILES MATCH${NC}"
             else
-                echo -e "Status: ${RED}DRIFT DETECTED${NC} ($modified_count modified, $missing_count missing)"
+                echo -e "Status: ${RED}DRIFT DETECTED${NC} ($modified_count modified, $missing_count missing, $marker_integrity_count marker issue(s))"
             fi
             ;;
 

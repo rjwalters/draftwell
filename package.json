@@ -4,10 +4,11 @@
   "description": "Iterative document refinement with AI-powered critical review",
   "type": "module",
   "private": true,
+  "packageManager": "pnpm@12.9.1",
   "scripts": {
     "dev": "vite",
     "diagnostics": "node scripts/diagnostics.mjs",
-    "build": "npm run typecheck && vite build",
+    "build": "pnpm run typecheck && vite build",
     "preview": "vite preview",
     "deploy": "wrangler pages deploy dist",
     "db:migrate": "wrangler d1 migrations apply draftwell-db --local",
@@ -18,12 +19,12 @@
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
-    "check:ci": "npm run typecheck && biome check . && vitest run && npm run test:panel",
-    "check:all": "npm run check:ci && npm run test:anvil",
+    "check:ci": "pnpm run typecheck && biome check . && vitest run && pnpm run test:panel",
+    "check:all": "pnpm run check:ci && pnpm run test:anvil",
     "worktree:return": "./.loom/scripts/worktree-return.sh",
     "dev:api": "wrangler pages dev dist --port 8788",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.functions.json && npm run check --workspaces",
-    "test:panel": "npm run build --workspace @draftwell/review-panel && npm test --workspace @draftwell/review-panel",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.functions.json && pnpm -r --filter './packages/*' run check",
+    "test:panel": "pnpm --filter @draftwell/review-panel run build && pnpm --filter @draftwell/review-panel test",
     "test:anvil": "uv run --project services/anvil --frozen python -m unittest discover -s services/anvil -v"
   },
   "dependencies": {
@@ -62,9 +63,6 @@
     "vitest": "^2.1.8",
     "wrangler": "^3.99.0"
   },
-  "workspaces": [
-    "packages/*"
-  ],
   "engines": {
     "node": ">=22.13.0"
   }

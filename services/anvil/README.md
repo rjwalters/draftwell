@@ -14,7 +14,7 @@ uv run --project services/anvil --frozen python services/anvil/server.py
 
 The server binds to `127.0.0.1:8790`. Set `ANVIL_URL=http://127.0.0.1:8790` and the same `ANVIL_TOKEN` in Draftwell's ignored `.dev.vars`, then restart the Pages development server. `ANVIL_HOST` and `ANVIL_PORT` override the listener explicitly. The server refuses to start without a token.
 
-This standard-library HTTP server is a local integration prototype. Production deployment needs a managed Python service behind TLS or a private network, with process supervision and request/resource limits. It is not deployed by `npm run deploy`.
+This standard-library HTTP server is a local integration prototype. Production deployment needs a managed Python service behind TLS or a private network, with process supervision and request/resource limits. It is not deployed by `pnpm run deploy`.
 
 ## Contract
 
@@ -38,7 +38,7 @@ The response contains the same identity and hash, `anvil_commit`, `rhetoric`, `n
 ## Tests and upgrades
 
 ```bash
-npm run test:anvil
+pnpm run test:anvil
 ```
 
 Tests cover arithmetic evidence, schema compatibility, word diff, rhetoric, hash/path rejection, authorization, and a real local HTTP round trip. Application-side tests additionally reject stale or incompatible runner results.

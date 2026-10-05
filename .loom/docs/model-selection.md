@@ -4,6 +4,10 @@ How Loom resolves each worker's model, the Judge-rejection escalation ladder, an
 the suggested-model defaults by role. Retuning these defaults is measurement-gated
 — see [`docs/model-selection-retune.md`](https://github.com/rjwalters/loom/blob/main/docs/model-selection-retune.md).
 
+For *task-oriented* recipes that combine these keys with the runtime, credential-pool
+and spend-bound axes ("put the expensive model on Judge", "minimize wall-clock"), see
+[`configuring-resources.md`](configuring-resources.md).
+
 ### Model Selection Strategy
 
 Model selection is a first-class orchestration concern (issue #3477, Phase 1). Each worker's model is resolved through a fixed precedence chain — highest first:
@@ -12,6 +16,8 @@ Model selection is a first-class orchestration concern (issue #3477, Phase 1). E
 2. **Workspace override** — `.loom/config.json` → `terminals[].roleConfig.model` (optional). Pin exact IDs here (e.g., `claude-sonnet-4-6`) when your workspace needs deterministic cost/behavior.
 3. **Role default** — `.loom/roles/<role>.json` → `suggestedModel` (ships as an alias). The `/loom:sweep` skill passes the resolved model to role subagents via the Task tool's `model` parameter.
 4. **Session default** — when nothing above resolves, NO `--model` flag (and no Task `model` param) is emitted at all, and the worker inherits the parent session/CLI default. This is the zero-config behavior: nothing configured means nothing changes.
+
+Tier 2's keys can also be set per-host without committing them: `config_resolver.rs` merges the committed `.loom-project/project.json` and then the ungitted, highest-precedence `.loom-local/local.json` overlay over `.loom/config.json` (see [`docs/design/config-resolution-tiers.md`](https://github.com/rjwalters/loom/blob/main/docs/design/config-resolution-tiers.md)) — so a one-host model override belongs in `.loom-local/local.json`, which **must stay gitignored**: unignored it is untracked dirt, and `check-main-clean.sh --quarantine` stashes untracked dirt between sweep waves, silently reverting the override (#8075).
 
 The spawn plumbing also honors a `LOOM_MODEL` environment variable (`spawn-claude.sh`, `claude-wrapper.sh`): it is injected as `--model <value>` unless an explicit `--model` is already present in the args. Retries inside `claude-wrapper.sh` always reuse the same model — transport-level failures (token exhaustion, crashes, 5xx) are not quality signals and never change the model.
 
@@ -68,6 +74,14 @@ The ladder is configured in `.loom/config.json`:
 
 **Aliases vs pinned IDs**: shipped role JSONs use aliases so defaults stay sensible across model releases with zero maintenance. The GitHub Actions cron workflows (`.github/workflows/loom-*.yml`) are the exception — they pin exact IDs because scheduled support roles are predictable, cost-sensitive load and a stale pin is visible and cheap to bump in the consuming repo.
 
+Daemon sweep dispatch resolves implicit defaults **after runtime admission**. An
+admitted Claude sweep keeps the cost-safe `sonnet` default (or its canary-gated
+experiment arm); admitted native runtimes use their model profile without a
+Claude default/experiment override. Explicit dispatch models still win, and
+`autonomous.model` keeps its existing precedence and alias handling. An explicit
+native model must match its profile or use `provider/model`; incompatible pins
+remain errors. Claude experiments still outrank `autonomous.model` when enabled.
+
 > **Logical-tier resolution (`sweep.modelAliases`, issue #3982).** A logical alias
 > is not always current on the wire: the bare `opus` alias still resolves to a
 > **previous-generation** model (`claude-opus-4-8`) while `sonnet`/`fable` resolve
@@ -75,8 +89,13 @@ The ladder is configured in `.loom/config.json`:
 > `sonnet → sonnet@xhigh → opus → fable` step *down* a generation at the `opus`
 > rung. So every consumer keeps naming `opus` and a **single indirection point**
 > maps the logical tier to the concrete ID the dispatch should use — the
-> `/loom:sweep` skill via `./.loom/scripts/resolve-model.sh`, `loom_tools` via
-> `model_tiers`, and `loom-daemon` via `resolve_dispatch_model`. The shipped map
+> `/loom:sweep` skill via `./.loom/scripts/resolve-model.sh` and `loom-daemon`
+> via `resolve_dispatch_model`. (Issue #4809:
+> a **daemon-dispatched** single-issue sweep resolves through the sibling
+> `resolve_autonomous_dispatch_model`, which inserts the model-cost A/B
+> experiment's forced arm — when resolved-`experiment` mode confirms a canary —
+> ahead of `resolve_dispatch_model`'s own config/default sub-tiers; an explicit
+> dispatch `model` param still wins over both.) The shipped map
 > pins only the stale tier (`opus → claude-opus-5`); `sonnet`/`fable` and pinned
 > IDs pass through unchanged. Repoint or drop a pin per-repo with an additive
 > `.loom/config.json` → `sweep.modelAliases` object (no code change):
@@ -132,7 +151,7 @@ The preset supplies a tier's logical model **only when `sweep.tierModels[<runtim
 | `cost` | `haiku` | `sonnet` | `opus` | The full 3-stratum spread — cheapest model the Judge gate can safely correct. |
 | `speed` | `sonnet` | `opus` | `opus` | Wall-clock in a sweep is dominated by Judge-rejection / Doctor **round-trip count**, not per-turn latency, so `speed` starts a tier higher than `balanced` to buy fewer retries rather than fewer/cheaper tokens per turn. `complex` is already at the ceiling under `balanced`'s own tier-2.5 `complex` bump, so `speed` leaves it unchanged and instead raises `mechanical`/`routine`. |
 
-The profile is expressed in the same runtime-neutral logical tiers (`haiku`/`sonnet`/`opus`) as `sweep.tierModels` and applies uniformly across runtimes — a Codex adapter under the #4167 contract resolves the same logical names to its own IDs, so there is no separate per-runtime preset table. All the tier-map hard bounds above apply identically to the profile: Builder-only, never resolves to `fable`, tier-1/tier-2 pins win, suppressed in model-cost experiment mode. An invalid `sweep.optimization` value (either source) warns and falls back to `balanced` — it never fails dispatch. Implementation: `loom_tools.model_tiers.resolve_optimization_profile` / `optimization_preset`, wired into `resolve_tier_model` (`resolve-tier-model.sh`'s Python backend); see `test_model_tiers.py` for the full profile × stratum × precedence matrix.
+The profile is expressed in the same runtime-neutral logical tiers (`haiku`/`sonnet`/`opus`) as `sweep.tierModels` and applies uniformly across runtimes — a Codex adapter under the #4167 contract resolves the same logical names to its own IDs, so there is no separate per-runtime preset table. All the tier-map hard bounds above apply identically to the profile: Builder-only, never resolves to `fable`, tier-1/tier-2 pins win, suppressed in model-cost experiment mode. An invalid `sweep.optimization` value (either source) warns and falls back to `balanced` — it never fails dispatch. Implementation: `resolve_optimization_profile` / `optimization_preset` in `loom-daemon/src/script_helpers/model_tiers.rs`, wired into `resolve_tier_model` (`resolve-tier-model.sh`'s native backend, reached via `resolve-model.sh --tier`); see that module's unit tests for the full profile × stratum × precedence matrix.
 
 **Workspace override example** (`.loom/config.json`):
 
@@ -152,3 +171,8 @@ The profile is expressed in the same runtime-neutral logical tiers (`haiku`/`son
   ]
 }
 ```
+
+**Fast-harness default + per-role quality levels** (e.g. a cheap Gemini-Flash
+default with Judge on a higher-quality model, including on native runtimes such
+as Pi/OpenCode) is the runbook recipe in
+[`configuring-resources.md`](configuring-resources.md).

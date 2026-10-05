@@ -1,2 +1,8 @@
 packages:
   - packages/*
+
+allowBuilds:
+  core-js: false
+  esbuild: true
+  sharp: false
+  workerd: true

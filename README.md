@@ -18,27 +18,27 @@ An optional Python adapter uses a pinned [Anvil](https://github.com/rjwalters/an
 
 ## Local development
 
-Use Node 22.13 or newer (the database tests use Node's SQLite module). CI uses Node 24. npm and pnpm workspace lockfiles are provided; the commands below use npm.
+Use Node 22.13 or newer (the database tests use Node's SQLite module). CI uses Node 24. The project uses pnpm (version pinned in `package.json`'s `packageManager`; enable it with `corepack enable`).
 
 ```bash
-npm ci
-npm run db:migrate
-npm run build
+pnpm install
+pnpm run db:migrate
+pnpm run build
 ```
 
 Run the API and frontend in separate terminals:
 
 ```bash
 # Terminal 1: local Pages Functions, D1, and R2 on port 8788
-npm run dev:api
+pnpm run dev:api
 ```
 
 ```bash
 # Terminal 2: Vite frontend on port 5173, proxying /api to port 8788
-npm run dev
+pnpm run dev
 ```
 
-Open `http://localhost:5173`. Local registration and document editing use local D1/R2. `npm run dev` alone does not start the API.
+Open `http://localhost:5173`. Local registration and document editing use local D1/R2. `pnpm run dev` alone does not start the API.
 
 Copy `.dev.vars.example` to `.dev.vars` and fill only the integrations you want to exercise. `.dev.vars` is ignored by git. Never put provider secrets in frontend environment variables.
 
@@ -66,10 +66,10 @@ Without a configured runner, normal editing/review still works and Check writing
 ## Checks
 
 ```bash
-npm run check:ci   # app + backend + package types, lint, Vitest, and Node review-panel tests
-npm run test:anvil # pinned Python adapter tests, including local HTTP requests
-npm run check:all  # both suites
-npm run build     # complete typecheck and production frontend build
+pnpm run check:ci   # app + backend + package types, lint, Vitest, and Node review-panel tests
+pnpm run test:anvil # pinned Python adapter tests, including local HTTP requests
+pnpm run check:all  # both suites
+pnpm run build     # complete typecheck and production frontend build
 ```
 
 The automated checks include SQLite migration/CAS tests, foreign-review rejection, autosave races and retries, review restoration, proposal acceptance, voice propagation, and adapter snapshot/authentication checks. GitHub Actions runs the application and adapter checks separately.
@@ -79,9 +79,9 @@ The automated checks include SQLite migration/CAS tests, foreign-review rejectio
 Apply the schema migrations before deploying this version of the application:
 
 ```bash
-npm run db:migrate:prod
-npm run build
-npm run deploy
+pnpm run db:migrate:prod
+pnpm run build
+pnpm run deploy
 ```
 
 Migration `0004_writing_workflow.sql` adds document voice selection, review metadata, and candidate revisions. The content API now requires a nonnegative integer `baseRevision` on content updates; stale saves return 409 and missing preconditions return 428. Revise/refine returns a proposal, accepted through `POST /api/projects/:projectId/documents/:documentId/candidates/:candidateId/accept`.
@@ -96,4 +96,4 @@ See [WORK_PLAN.md](WORK_PLAN.md), the [original audit](docs/PROJECT_AUDIT.md), a
 
 MIT license.
 
-Troubleshooting: API errors include a request reference. Use `npm run diagnostics -- <request-id>` to inspect retained AI stage events and server failures; see [Troubleshooting](docs/TROUBLESHOOTING.md).
+Troubleshooting: API errors include a request reference. Use `pnpm run diagnostics -- <request-id>` to inspect retained AI stage events and server failures; see [Troubleshooting](docs/TROUBLESHOOTING.md).

@@ -7,13 +7,13 @@ error message. Ask for this reference and the action that failed.
 Read recent AI requests and server failures:
 
 ```sh
-npm run diagnostics
+pnpm run diagnostics
 ```
 
 Look up the full trace for a reference:
 
 ```sh
-npm run diagnostics -- 00000000-0000-4000-8000-000000000000
+pnpm run diagnostics -- 00000000-0000-4000-8000-000000000000
 ```
 
 The command uses the existing Wrangler login and production D1 database. Add
