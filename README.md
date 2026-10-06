@@ -12,8 +12,8 @@ An optional Python adapter uses a pinned [Anvil](https://github.com/rjwalters/an
 
 - React 19, TypeScript, Vite, Tailwind, Monaco, and jsPDF.
 - Cloudflare Pages Functions for the API, D1 for metadata/auth, R2 for document/review content, Workers AI for voice analysis, and Claude for document review/revision.
-- `src/`: frontend; `functions/`: API; `migrations/`: D1 schema.
-- `packages/styleguide/` and `packages/review-panel/`: shared TypeScript libraries.
+- `src/`: frontend; [`functions/`](functions/README.md): API; `migrations/`: D1 schema.
+- [`packages/styleguide/`](packages/styleguide/README.md) and [`packages/review-panel/`](packages/review-panel/README.md): shared TypeScript libraries.
 - `services/anvil/`: optional Python writing-check adapter and pinned dependency lock.
 
 ## Local development
